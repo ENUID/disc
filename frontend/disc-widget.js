@@ -95,8 +95,8 @@
       this._iconBtn = document.createElement("button");
       this._iconBtn.type = "button";
       this._iconBtn.className = "disc-bar-icon";
-      this._iconBtn.setAttribute("aria-label", "Clear search");
-      this._iconBtn.innerHTML = DISC_BRAND_ICON;
+      this._iconBtn.setAttribute("aria-label", "Disc");
+      this._iconBtn.innerHTML = DISC_WARDROBE_ICON;
 
       this._sendBtn = document.createElement("button");
       this._sendBtn.type = "button";
@@ -200,7 +200,7 @@
 
     _syncIconState() {
       var hasValue = this._input.value.length > 0;
-      this._iconBtn.innerHTML = hasValue ? DISC_CLEAR_ICON : DISC_BRAND_ICON;
+      this._iconBtn.innerHTML = hasValue ? DISC_CLEAR_ICON : DISC_WARDROBE_ICON;
       this._iconBtn.setAttribute("aria-label", hasValue ? "Clear search" : "Disc");
       this._sendBtn.disabled = this._input.value.trim().length < 2;
     }
@@ -393,10 +393,14 @@
     );
   }
 
-  var DISC_BRAND_ICON =
+  var DISC_WARDROBE_ICON =
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>' +
-    '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
+    '<rect x="5" y="3" width="14" height="16" rx="1.5" stroke="currentColor" stroke-width="1.6"/>' +
+    '<line x1="12" y1="3" x2="12" y2="19" stroke="currentColor" stroke-width="1.6"/>' +
+    '<line x1="9.5" y1="10" x2="9.5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+    '<line x1="14.5" y1="10" x2="14.5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+    '<line x1="7.5" y1="19" x2="7.5" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
+    '<line x1="16.5" y1="19" x2="16.5" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
     "</svg>";
 
   var DISC_CLEAR_ICON =
