@@ -2,10 +2,12 @@
  * Disc — Intent Search Widget
  * https://enuidlabs.com/disc
  *
- * A single persistent conversational bar docked to the bottom of the
- * viewport. It never touches the merchant's theme or its native search —
- * the store stays exactly as it is. Disc is purely additive: one clean
- * pill-shaped input, and a results panel that opens upward above it.
+ * A conversational bar that takes over the theme's own search input's
+ * spot on the page: the native input is hidden (not removed — its layout
+ * space is preserved so nothing in the theme reflows) and Disc's own
+ * glass bar is positioned exactly over it. Merchants don't need two
+ * search boxes once Disc is installed, so the native one visually
+ * disappears, replaced in place by Disc.
  *
  * The material is a CSS approximation of Apple's Liquid Glass: real live
  * backdrop blur+saturation (actual pixels behind it, not a screenshot), a
@@ -29,14 +31,16 @@
       (CURRENT_SCRIPT && CURRENT_SCRIPT.dataset.apiUrl) ||
       (window.DiscConfig && window.DiscConfig.apiUrl) ||
       "http://localhost:8000",
+    searchSelectors: 'input[name="q"], input[type="search"]',
+    scanIntervalMs: 500,
     debounceMs: 300,
     resultLimit: 5,
   };
 
   // ---------------------------------------------------------------------
   // <disc-search-bar> — the entire bar + results panel live in its Shadow
-  // DOM. The host is fixed to the bottom of the viewport for the whole
-  // page lifetime; only the results panel opens and closes.
+  // DOM. The host is fixed-positioned and repositioned to exactly overlay
+  // wherever the theme's native search input lives, once found.
   // ---------------------------------------------------------------------
   class DiscSearchBar extends HTMLElement {
     constructor() {
@@ -45,6 +49,7 @@
       this._activeIndex = -1;
       this._results = [];
       this._lastQuery = "";
+      this._nativeInput = null;
       this._buildDom();
     }
 
@@ -73,11 +78,8 @@
       this._bar = document.createElement("div");
       this._bar.className = "disc-bar";
 
-      this._iconBtn = document.createElement("button");
-      this._iconBtn.type = "button";
-      this._iconBtn.className = "disc-bar-icon";
-      this._iconBtn.setAttribute("aria-label", "Clear search");
-      this._iconBtn.innerHTML = DISC_BRAND_ICON;
+      var inputRow = document.createElement("div");
+      inputRow.className = "disc-bar-row disc-bar-row--input";
 
       this._input = document.createElement("input");
       this._input.type = "text";
@@ -86,6 +88,17 @@
       this._input.autocomplete = "off";
       this._input.setAttribute("aria-label", "Search products");
 
+      inputRow.appendChild(this._input);
+
+      var controlsRow = document.createElement("div");
+      controlsRow.className = "disc-bar-row disc-bar-row--controls";
+
+      this._iconBtn = document.createElement("button");
+      this._iconBtn.type = "button";
+      this._iconBtn.className = "disc-bar-icon";
+      this._iconBtn.setAttribute("aria-label", "Clear search");
+      this._iconBtn.innerHTML = DISC_BRAND_ICON;
+
       this._sendBtn = document.createElement("button");
       this._sendBtn.type = "button";
       this._sendBtn.className = "disc-send";
@@ -93,9 +106,11 @@
       this._sendBtn.setAttribute("aria-label", "Search");
       this._sendBtn.innerHTML = DISC_SEND_ICON;
 
-      this._bar.appendChild(this._iconBtn);
-      this._bar.appendChild(this._input);
-      this._bar.appendChild(this._sendBtn);
+      controlsRow.appendChild(this._iconBtn);
+      controlsRow.appendChild(this._sendBtn);
+
+      this._bar.appendChild(inputRow);
+      this._bar.appendChild(controlsRow);
 
       wrap.appendChild(this._panel);
       wrap.appendChild(this._bar);
@@ -107,17 +122,46 @@
     connectedCallback() {
       // Host element attributes must not be touched inside the
       // constructor (the Custom Elements spec forbids it) — this is the
-      // first safe place to size and position the host itself.
+      // first safe place to size and position the host itself. Stays
+      // invisible until attachTo() knows where the native input is, so
+      // there's no flash at the wrong spot on the page.
       this.style.position = "fixed";
-      this.style.left = "50%";
-      this.style.bottom = "max(20px, env(safe-area-inset-bottom, 20px))";
-      this.style.transform = "translateX(-50%)";
-      this.style.width = "min(640px, calc(100vw - 32px))";
       this.style.zIndex = "2147483647";
+      this.style.visibility = "hidden";
 
       bindPointerTracking(this._bar);
       bindPointerTracking(this._panel);
       this._bindEvents();
+    }
+
+    // Hides the theme's native search input (preserving its layout space
+    // so nothing reflows) and takes over its spot on the page.
+    attachTo(nativeInputEl) {
+      this._nativeInput = nativeInputEl;
+      nativeInputEl.style.visibility = "hidden";
+      this._reposition();
+      this.style.visibility = "visible";
+
+      var self = this;
+      window.addEventListener(
+        "scroll",
+        function () {
+          self._reposition();
+        },
+        true
+      );
+      window.addEventListener("resize", function () {
+        self._reposition();
+      });
+    }
+
+    _reposition() {
+      if (!this._nativeInput) return;
+      var rect = this._nativeInput.getBoundingClientRect();
+      var barHeight = this._bar.offsetHeight || 118;
+      this.style.left = rect.left + "px";
+      this.style.top = rect.top + rect.height / 2 - barHeight / 2 + "px";
+      this.style.width = rect.width + "px";
     }
 
     _bindEvents() {
@@ -539,16 +583,19 @@
 
     .disc-bar {
       display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 6px 6px 20px;
-      border-radius: 9999px;
+      flex-direction: column;
+      gap: 14px;
+      padding: 18px 20px 16px;
+      border-radius: 30px;
     }
+
+    .disc-bar-row--input { display: flex; }
+    .disc-bar-row--controls { display: flex; align-items: center; justify-content: space-between; }
 
     .disc-bar-icon, .disc-send {
       flex-shrink: 0;
-      width: 34px;
-      height: 34px;
+      width: 44px;
+      height: 44px;
       border-radius: 9999px;
       display: flex;
       align-items: center;
@@ -559,9 +606,9 @@
       font: inherit;
       transition: background-color 0.15s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.15s ease;
     }
-    .disc-bar-icon svg, .disc-send svg { width: 16px; height: 16px; }
-    .disc-bar-icon { background: transparent; color: var(--disc-text-secondary); }
-    .disc-bar-icon:hover { background-color: var(--disc-hover); }
+    .disc-bar-icon svg, .disc-send svg { width: 18px; height: 18px; }
+    .disc-bar-icon { background: var(--disc-hover); color: var(--disc-text-secondary); }
+    .disc-bar-icon:hover { background-color: var(--disc-scrollbar); }
     .disc-bar-icon:active { transform: scale(0.9); }
 
     .disc-send { background: var(--disc-text); color: var(--disc-accent-contrast); }
@@ -576,10 +623,10 @@
       outline: none;
       background: transparent;
       font: inherit;
-      font-size: 15px;
+      font-size: 16.5px;
       font-weight: 480;
       color: var(--disc-text);
-      padding: 9px 2px;
+      padding: 2px;
     }
     .disc-input::placeholder { color: var(--disc-text-secondary); }
 
@@ -587,15 +634,15 @@
       position: absolute;
       left: 0;
       right: 0;
-      bottom: calc(100% + 12px);
+      top: calc(100% + 12px);
       border-radius: 26px;
       max-height: 420px;
       overflow-y: auto;
       overflow-x: hidden;
       opacity: 0;
       pointer-events: none;
-      transform: translateY(8px) scale(0.97);
-      transform-origin: bottom center;
+      transform: translateY(-8px) scale(0.97);
+      transform-origin: top center;
       transition:
         opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
         transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -768,13 +815,23 @@
   }
 
   // ---------------------------------------------------------------------
-  // Disc owns its own input from the start, so there's nothing to wait
-  // for or scan the DOM for — the bar mounts once and stays for the life
-  // of the page, completely independent of the theme's own search.
+  // DOMScanner — polls for the theme's native search input until it
+  // appears, then stops. Handles themes that render search chrome after
+  // Disc loads. The bar stays hidden (set in connectedCallback) until a
+  // native input is actually found and attachTo() positions it there.
   // ---------------------------------------------------------------------
   function init() {
     if (document.querySelector("disc-search-bar")) return;
-    document.body.appendChild(document.createElement("disc-search-bar"));
+    var bar = document.createElement("disc-search-bar");
+    document.body.appendChild(bar);
+
+    var interval = setInterval(function () {
+      var input = document.querySelector(CONFIG.searchSelectors);
+      if (input) {
+        clearInterval(interval);
+        bar.attachTo(input);
+      }
+    }, CONFIG.scanIntervalMs);
   }
 
   if (document.readyState === "loading") {

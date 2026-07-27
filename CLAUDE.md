@@ -3,16 +3,24 @@
 ## What this is
 
 Disc is a B2B product from Enuid Labs. Shopify merchants install a single
-`<script>` tag and get a persistent AI-powered conversational search bar
-docked to the bottom of the viewport. **The store itself is never
-touched** — Disc does not hijack, restyle, or intercept the theme's own
-native search. It's a second, independent, always-visible entry point,
-not a replacement for anything already on the page.
+`<script>` tag and Disc takes over the spot on the page where the
+theme's own search input lives. That native input is hidden (its layout
+space is preserved so nothing else on the page reflows — this is not a
+DOM removal) and Disc's own glass conversational bar is positioned
+exactly on top of it. Merchants don't need two search boxes once Disc is
+installed, so the native one visually disappears in place.
 
-(An earlier iteration of this widget hijacked the theme's native search
-input instead of adding its own bar. That approach is gone — don't
-reintroduce DOM-scanning/hijack logic without checking with the user
-first, since moving away from it was a deliberate product decision.)
+This has gone through two prior iterations, both retired deliberately —
+don't reintroduce either without checking with the user first:
+1. Hijacking the native input directly (reusing its DOM node, attaching
+   listeners to it, `preventDefault()` on its form submit).
+2. An independent bar fixed to the bottom of the viewport, coexisting
+   with an untouched native search elsewhere on the page.
+
+The current model is a hybrid: Disc owns its own separate input/DOM (not
+the native node, same as iteration 2), but is positioned at the native
+input's location and hides it (closer to iteration 1's visual outcome,
+achieved without touching the native element's events).
 
 Product name is **Disc** everywhere: package name, web component tag,
 CSS class prefixes, file names, log lines, comments. Never "Discern",
@@ -28,7 +36,7 @@ and is wrong everywhere it appears now.
   requirements.txt
   data/           -> generated LanceDB directory (gitignored; rebuild with `python ingest.py`)
 /frontend
-  disc-widget.js  -> the entire client: Web Component + Shadow DOM + DOM hijack logic
+  disc-widget.js  -> the entire client: Web Component + Shadow DOM + native-input takeover
 test.html         -> a fake Shopify PDP/search page for local end-to-end testing
 test_search.py    -> scripted test hitting POST /search with a real intent query
 ```
@@ -52,29 +60,35 @@ test_search.py    -> scripted test hitting POST /search with a real intent query
 
 ### Frontend — the widget contract
 
-**Critical rule: the store stays the same.** Disc adds exactly one new
-element to the page and touches nothing else — no restyling the theme, no
-intercepting its search form, no second input competing with the native
-one for the same spot on the page.
+**Critical rule: no double search bars.** Once Disc attaches, there is
+exactly one visible, usable search entry point on the page — Disc's own.
 
-1. `<disc-search-bar>` is a single custom element, appended to `<body>`
-   once on page load (or `DOMContentLoaded` if the script runs before the
-   body exists). No DOM scanning, no waiting for a native element —
-   Disc owns its input from the start and the bar is present for the
-   whole page lifetime.
-2. The host element is `position: fixed`, centered near the bottom of the
-   viewport (`bottom: max(20px, env(safe-area-inset-bottom))`). Only the
-   results panel above it opens and closes; the bar itself never
-   disappears.
-3. All rendered UI — the input, the results panel, skeleton loaders,
+1. A `DOMScanner` polls every 500ms for a native input matching
+   `input[name="q"], input[type="search"]` (extend selectors as needed
+   per-theme). Once found, the interval is cleared and `attachTo()` runs.
+2. `attachTo(nativeInputEl)` sets `nativeInputEl.style.visibility =
+   "hidden"` (not `display: none` — visibility preserves the element's
+   layout space, so the rest of the theme doesn't reflow around a
+   collapsed box) and positions Disc's own host element exactly over it,
+   vertically centered on the native input's center point since Disc's
+   two-row bar is taller than a typical single-line search input.
+3. `<disc-search-bar>` is `position: fixed` and starts `visibility:
+   hidden` in `connectedCallback` — it stays invisible until `attachTo()`
+   knows where to put it, so there's no flash at the wrong spot (e.g. the
+   top-left corner) while the scanner is still looking.
+4. Position is recalculated on `scroll` (capture phase, so it catches
+   scrolling inside any container, not just the window) and `resize`,
+   the same way the very first hijack-based iteration did it —
+   `getBoundingClientRect()` on the native input, applied to the fixed
+   host's `left`/`top`/`width`.
+5. All rendered UI — the input, the results panel, skeleton loaders,
    result cards — lives inside that one element's `attachShadow({ mode:
-   "open" })` root. Shadow DOM is what gives CSS isolation on an
-   arbitrary, unknown Shopify theme; styles are injected as a `<style>`
-   tag inside the shadow root, never into the host document's `<head>`.
-4. The results panel is positioned with plain CSS (`position: absolute;
-   bottom: calc(100% + 12px)`) relative to the bar, inside the same
-   shadow root — no `getBoundingClientRect` math needed, since both live
-   in the same fixed-position container.
+   "open" })` root. Styles are injected as a `<style>` tag inside the
+   shadow root, never into the host document's `<head>`.
+6. The results panel opens **downward** (`position: absolute; top:
+   calc(100% + 12px)`) since the bar now typically sits near the top of
+   the page rather than pinned to the viewport bottom — check this if
+   you ever see it rendering off-screen above the viewport.
 
 ### Design system
 
@@ -109,9 +123,17 @@ uvicorn server:app --reload --port 8000
 ```
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
-points it at `http://localhost:8000`) to see the persistent bar at the
-bottom of the page and confirm the fake theme's own search form above it
-is completely untouched.
+points it at `http://localhost:8000`) to see the fake theme's own search
+input get hidden and Disc's glass bar take its exact place.
+
+Known limitation worth knowing about before "fixing" it: the widget's
+dark-mode colors follow the shopper's OS-level `prefers-color-scheme`,
+not the actual lightness of the merchant's page. A shopper in OS dark
+mode on a site that's only ever light-themed will see Disc's dark-glass
+text against a light backdrop bleeding through the blur, which can read
+low-contrast. Properly fixing this means sampling the actual backdrop's
+luminance (expensive, and not attempted here) rather than trusting the
+OS preference as a proxy for it.
 
 `python test_search.py` sends a real intent query straight to `POST
 /search` and asserts on the ranking (semantic search should rank "Olive

@@ -7,7 +7,7 @@
       body {
         font-family: system-ui, sans-serif;
         max-width: 640px;
-        margin: 80px auto;
+        margin: 80px auto 240px;
         color: #111;
         background: #fafafa;
       }
@@ -15,7 +15,7 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 40px;
+        margin-bottom: 80px;
       }
       .logo {
         font-weight: 800;
@@ -37,7 +37,7 @@
         border-color: #111;
       }
       .hint {
-        margin-top: 12px;
+        margin-top: 80px;
         font-size: 13px;
         color: #888;
       }
@@ -49,10 +49,11 @@
       <nav>Shop / About / Cart (0)</nav>
     </header>
 
-    <!-- This mimics a stock Shopify theme's own search form. Disc never
-         touches it — the store stays exactly as it is. Disc adds a
-         completely separate, persistent conversational bar docked to the
-         bottom of the viewport instead. -->
+    <!-- This mimics a stock Shopify theme's own search form. Disc finds
+         this exact input, hides it (layout space preserved, so nothing
+         else on the page reflows), and positions its own glass bar
+         exactly where this one was — merchants don't need two search
+         boxes once Disc is installed. -->
     <form action="/search" method="get" role="search">
       <input
         type="search"
@@ -62,12 +63,10 @@
       />
     </form>
     <p class="hint">
-      That search box above is the theme's own, untouched by Disc. Try
-      typing into the Disc bar at the bottom of the page instead: "I need
-      a breathable layer for a humid beach vacation"
+      The search box above is hidden once Disc attaches — its glass bar
+      takes over that exact spot. Try: "I need a breathable layer for a
+      humid beach vacation"
     </p>
-
-    <div style="height: 100px"></div>
 
     <script src="frontend/disc-widget.js" data-api-url="http://localhost:8000"></script>
   </body>
