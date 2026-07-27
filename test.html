@@ -7,7 +7,7 @@
       body {
         font-family: system-ui, sans-serif;
         max-width: 640px;
-        margin: 80px auto 240px;
+        margin: 80px auto 160px;
         color: #111;
         background: #fafafa;
       }
@@ -15,7 +15,7 @@
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 80px;
+        margin-bottom: 40px;
       }
       .logo {
         font-weight: 800;
@@ -37,7 +37,7 @@
         border-color: #111;
       }
       .hint {
-        margin-top: 80px;
+        margin-top: 12px;
         font-size: 13px;
         color: #888;
       }
@@ -50,10 +50,9 @@
     </header>
 
     <!-- This mimics a stock Shopify theme's own search form. Disc finds
-         this exact input, hides it (layout space preserved, so nothing
-         else on the page reflows), and positions its own glass bar
-         exactly where this one was — merchants don't need two search
-         boxes once Disc is installed. -->
+         this exact input and hides it (layout space preserved, so
+         nothing else on the page reflows) — merchants don't need two
+         search boxes once Disc's own bar is floating over the store. -->
     <form action="/search" method="get" role="search">
       <input
         type="search"
@@ -63,9 +62,9 @@
       />
     </form>
     <p class="hint">
-      The search box above is hidden once Disc attaches — its glass bar
-      takes over that exact spot. Try: "I need a breathable layer for a
-      humid beach vacation"
+      The search box above disappears once Disc attaches. Try the Disc
+      bar floating at the bottom of the page instead: "I need a
+      breathable layer for a humid beach vacation"
     </p>
 
     <script src="frontend/disc-widget.js" data-api-url="http://localhost:8000"></script>

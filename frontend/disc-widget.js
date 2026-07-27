@@ -2,12 +2,12 @@
  * Disc — Intent Search Widget
  * https://enuidlabs.com/disc
  *
- * A conversational bar that takes over the theme's own search input's
- * spot on the page: the native input is hidden (not removed — its layout
- * space is preserved so nothing in the theme reflows) and Disc's own
- * glass bar is positioned exactly over it. Merchants don't need two
- * search boxes once Disc is installed, so the native one visually
- * disappears, replaced in place by Disc.
+ * A conversational bar that floats fixed above the whole store — the
+ * page scrolls underneath it, visible blurred through the glass. It
+ * isn't tied to any single element's position on the page. The theme's
+ * own native search input is hidden (not removed — its layout space is
+ * preserved so nothing in the theme reflows) as soon as Disc attaches,
+ * since merchants don't need two search boxes once Disc is installed.
  *
  * The material is a CSS approximation of Apple's Liquid Glass: real live
  * backdrop blur+saturation (actual pixels behind it, not a screenshot), a
@@ -39,8 +39,8 @@
 
   // ---------------------------------------------------------------------
   // <disc-search-bar> — the entire bar + results panel live in its Shadow
-  // DOM. The host is fixed-positioned and repositioned to exactly overlay
-  // wherever the theme's native search input lives, once found.
+  // DOM. The host is fixed to the bottom of the viewport for the whole
+  // page lifetime; only the results panel opens and closes.
   // ---------------------------------------------------------------------
   class DiscSearchBar extends HTMLElement {
     constructor() {
@@ -49,7 +49,6 @@
       this._activeIndex = -1;
       this._results = [];
       this._lastQuery = "";
-      this._nativeInput = null;
       this._buildDom();
     }
 
@@ -122,46 +121,17 @@
     connectedCallback() {
       // Host element attributes must not be touched inside the
       // constructor (the Custom Elements spec forbids it) — this is the
-      // first safe place to size and position the host itself. Stays
-      // invisible until attachTo() knows where the native input is, so
-      // there's no flash at the wrong spot on the page.
+      // first safe place to size and position the host itself.
       this.style.position = "fixed";
+      this.style.left = "50%";
+      this.style.bottom = "max(20px, env(safe-area-inset-bottom, 20px))";
+      this.style.transform = "translateX(-50%)";
+      this.style.width = "min(640px, calc(100vw - 32px))";
       this.style.zIndex = "2147483647";
-      this.style.visibility = "hidden";
 
       bindPointerTracking(this._bar);
       bindPointerTracking(this._panel);
       this._bindEvents();
-    }
-
-    // Hides the theme's native search input (preserving its layout space
-    // so nothing reflows) and takes over its spot on the page.
-    attachTo(nativeInputEl) {
-      this._nativeInput = nativeInputEl;
-      nativeInputEl.style.visibility = "hidden";
-      this._reposition();
-      this.style.visibility = "visible";
-
-      var self = this;
-      window.addEventListener(
-        "scroll",
-        function () {
-          self._reposition();
-        },
-        true
-      );
-      window.addEventListener("resize", function () {
-        self._reposition();
-      });
-    }
-
-    _reposition() {
-      if (!this._nativeInput) return;
-      var rect = this._nativeInput.getBoundingClientRect();
-      var barHeight = this._bar.offsetHeight || 118;
-      this.style.left = rect.left + "px";
-      this.style.top = rect.top + rect.height / 2 - barHeight / 2 + "px";
-      this.style.width = rect.width + "px";
     }
 
     _bindEvents() {
@@ -634,15 +604,17 @@
       position: absolute;
       left: 0;
       right: 0;
-      top: calc(100% + 12px);
+      bottom: calc(100% + 12px);
       border-radius: 26px;
-      max-height: 420px;
+      /* Capped by viewport height too, so a short landscape-phone screen
+         never has the panel taller than there's room for above the bar. */
+      max-height: min(420px, 60dvh);
       overflow-y: auto;
       overflow-x: hidden;
       opacity: 0;
       pointer-events: none;
-      transform: translateY(-8px) scale(0.97);
-      transform-origin: top center;
+      transform: translateY(8px) scale(0.97);
+      transform-origin: bottom center;
       transition:
         opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
         transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -815,21 +787,23 @@
   }
 
   // ---------------------------------------------------------------------
-  // DOMScanner — polls for the theme's native search input until it
-  // appears, then stops. Handles themes that render search chrome after
-  // Disc loads. The bar stays hidden (set in connectedCallback) until a
-  // native input is actually found and attachTo() positions it there.
+  // Disc's own bar is fixed to the bottom of the viewport independent of
+  // anything else on the page, so it mounts and is usable immediately.
+  // A DOMScanner separately polls for the theme's native search input —
+  // whenever it turns up, it's hidden (visibility:hidden preserves its
+  // layout space, so nothing in the theme reflows) since merchants don't
+  // need two search boxes once Disc is installed. Scanning never runs
+  // forever: the interval clears the moment the input is found.
   // ---------------------------------------------------------------------
   function init() {
     if (document.querySelector("disc-search-bar")) return;
-    var bar = document.createElement("disc-search-bar");
-    document.body.appendChild(bar);
+    document.body.appendChild(document.createElement("disc-search-bar"));
 
     var interval = setInterval(function () {
       var input = document.querySelector(CONFIG.searchSelectors);
       if (input) {
         clearInterval(interval);
-        bar.attachTo(input);
+        input.style.visibility = "hidden";
       }
     }, CONFIG.scanIntervalMs);
   }

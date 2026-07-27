@@ -3,24 +3,29 @@
 ## What this is
 
 Disc is a B2B product from Enuid Labs. Shopify merchants install a single
-`<script>` tag and Disc takes over the spot on the page where the
-theme's own search input lives. That native input is hidden (its layout
-space is preserved so nothing else on the page reflows — this is not a
-DOM removal) and Disc's own glass conversational bar is positioned
-exactly on top of it. Merchants don't need two search boxes once Disc is
-installed, so the native one visually disappears in place.
+`<script>` tag and get a conversational search bar that floats fixed
+above the whole store — like Claude's own bottom-docked composer, on
+every device, sized and spaced for whatever viewport it's opened in. The
+page scrolls underneath it, visible blurred through the glass. The
+theme's own native search input is hidden as soon as Disc attaches (its
+layout space is preserved so nothing else on the page reflows — this is
+not a DOM removal) since merchants don't need two search boxes once Disc
+is installed.
 
-This has gone through two prior iterations, both retired deliberately —
-don't reintroduce either without checking with the user first:
+This has gone through three iterations; don't reintroduce an earlier one
+without checking with the user first:
 1. Hijacking the native input directly (reusing its DOM node, attaching
    listeners to it, `preventDefault()` on its form submit).
 2. An independent bar fixed to the bottom of the viewport, coexisting
    with an untouched native search elsewhere on the page.
+3. Disc's own bar positioned exactly over the native input's location
+   (not fixed-bottom), with the native input hidden.
 
-The current model is a hybrid: Disc owns its own separate input/DOM (not
-the native node, same as iteration 2), but is positioned at the native
-input's location and hides it (closer to iteration 1's visual outcome,
-achieved without touching the native element's events).
+The current (fourth) model combines pieces of 2 and 3: Disc's bar is
+fixed to the bottom of the viewport like iteration 2 — **not** tied to
+the native input's position — but the native input is hidden like
+iteration 3, via a simple scan-and-hide with no position-tracking
+attached to it.
 
 Product name is **Disc** everywhere: package name, web component tag,
 CSS class prefixes, file names, log lines, comments. Never "Discern",
@@ -63,32 +68,34 @@ test_search.py    -> scripted test hitting POST /search with a real intent query
 **Critical rule: no double search bars.** Once Disc attaches, there is
 exactly one visible, usable search entry point on the page — Disc's own.
 
-1. A `DOMScanner` polls every 500ms for a native input matching
-   `input[name="q"], input[type="search"]` (extend selectors as needed
-   per-theme). Once found, the interval is cleared and `attachTo()` runs.
-2. `attachTo(nativeInputEl)` sets `nativeInputEl.style.visibility =
-   "hidden"` (not `display: none` — visibility preserves the element's
-   layout space, so the rest of the theme doesn't reflow around a
-   collapsed box) and positions Disc's own host element exactly over it,
-   vertically centered on the native input's center point since Disc's
-   two-row bar is taller than a typical single-line search input.
-3. `<disc-search-bar>` is `position: fixed` and starts `visibility:
-   hidden` in `connectedCallback` — it stays invisible until `attachTo()`
-   knows where to put it, so there's no flash at the wrong spot (e.g. the
-   top-left corner) while the scanner is still looking.
-4. Position is recalculated on `scroll` (capture phase, so it catches
-   scrolling inside any container, not just the window) and `resize`,
-   the same way the very first hijack-based iteration did it —
-   `getBoundingClientRect()` on the native input, applied to the fixed
-   host's `left`/`top`/`width`.
-5. All rendered UI — the input, the results panel, skeleton loaders,
-   result cards — lives inside that one element's `attachShadow({ mode:
-   "open" })` root. Styles are injected as a `<style>` tag inside the
-   shadow root, never into the host document's `<head>`.
-6. The results panel opens **downward** (`position: absolute; top:
-   calc(100% + 12px)`) since the bar now typically sits near the top of
-   the page rather than pinned to the viewport bottom — check this if
-   you ever see it rendering off-screen above the viewport.
+1. `<disc-search-bar>` mounts and is immediately usable: `position:
+   fixed`, centered near the bottom of the viewport (`bottom: max(20px,
+   env(safe-area-inset-bottom))`, `width: min(640px, calc(100vw -
+   32px))`). It is **not** positioned relative to the native search input
+   — it doesn't need to know where that is, or even whether one exists,
+   to render and function.
+2. Separately, a `DOMScanner` polls every 500ms for a native input
+   matching `input[name="q"], input[type="search"]` (extend selectors as
+   needed per-theme). Once found, the interval clears and the input is
+   set to `visibility: hidden` (not `display: none` — visibility
+   preserves its layout space, so the rest of the theme doesn't reflow
+   around a collapsed box) and otherwise left alone.
+3. All rendered UI — the input, the results panel, skeleton loaders,
+   result cards — lives inside `<disc-search-bar>`'s own `attachShadow({
+   mode: "open" })` root. Styles are injected as a `<style>` tag inside
+   the shadow root, never into the host document's `<head>`.
+4. The results panel opens **upward** (`position: absolute; bottom:
+   calc(100% + 12px)`) since the bar sits at the bottom of the viewport.
+   Its `max-height` is capped at `min(420px, 60dvh)` so it can't overflow
+   a short viewport (e.g. a phone in landscape) — check this if you ever
+   see it clipped or the bar itself pushed off-screen.
+5. Sizing is meant to hold up across the full device range (phone
+   portrait/landscape, tablet, desktop) without a device-specific branch:
+   the `min()`/`env()`-based host sizing and the panel's `dvh`-capped
+   height are what do that work. Verify any future CSS change against at
+   least a narrow phone (~320–375px), a short landscape phone (~375px
+   tall), and a wide desktop viewport — it's cheap to check with
+   Playwright and easy to silently break one of them while fixing another.
 
 ### Design system
 
@@ -124,7 +131,7 @@ uvicorn server:app --reload --port 8000
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
 points it at `http://localhost:8000`) to see the fake theme's own search
-input get hidden and Disc's glass bar take its exact place.
+input get hidden and Disc's own glass bar floating at the bottom.
 
 Known limitation worth knowing about before "fixing" it: the widget's
 dark-mode colors follow the shopper's OS-level `prefers-color-scheme`,
