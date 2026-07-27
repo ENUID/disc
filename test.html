@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fake Shopify Store — Disc widget test harness</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 640px;
+        margin: 80px auto;
+        color: #111;
+        background: #fafafa;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 40px;
+      }
+      .logo {
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+      form {
+        position: relative;
+      }
+      input[type="search"] {
+        width: 100%;
+        padding: 14px 16px;
+        font-size: 15px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        outline: none;
+      }
+      input[type="search"]:focus {
+        border-color: #111;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #888;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo">ACME OUTFITTERS</div>
+      <nav>Shop / About / Cart (0)</nav>
+    </header>
+
+    <!-- This mimics a stock Shopify theme's predictive search form. Disc
+         must hijack this exact input without adding a second search box. -->
+    <form action="/search" method="get" role="search">
+      <input
+        type="search"
+        name="q"
+        placeholder="Search store..."
+        autocomplete="off"
+      />
+    </form>
+    <p class="hint">
+      Try: "I need a breathable layer for a humid beach vacation"
+    </p>
+
+    <script src="frontend/disc-widget.js" data-api-url="http://localhost:8000"></script>
+  </body>
+</html>

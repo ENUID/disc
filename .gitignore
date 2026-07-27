@@ -1,0 +1,11 @@
+# Generated LanceDB vector table — rebuild locally with `python ingest.py`
+backend/data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor/OS cruft
+.DS_Store
