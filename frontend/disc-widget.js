@@ -80,23 +80,16 @@
       var inputRow = document.createElement("div");
       inputRow.className = "disc-bar-row disc-bar-row--input";
 
-      this._input = document.createElement("input");
-      this._input.type = "text";
+      this._input = document.createElement("textarea");
       this._input.className = "disc-input";
+      this._input.rows = 1;
       this._input.placeholder = "What are you looking for?";
-      this._input.autocomplete = "off";
       this._input.setAttribute("aria-label", "Search products");
 
       inputRow.appendChild(this._input);
 
       var controlsRow = document.createElement("div");
       controlsRow.className = "disc-bar-row disc-bar-row--controls";
-
-      this._iconBtn = document.createElement("button");
-      this._iconBtn.type = "button";
-      this._iconBtn.className = "disc-bar-icon";
-      this._iconBtn.setAttribute("aria-label", "Disc");
-      this._iconBtn.innerHTML = DISC_WARDROBE_ICON;
 
       this._sendBtn = document.createElement("button");
       this._sendBtn.type = "button";
@@ -105,7 +98,6 @@
       this._sendBtn.setAttribute("aria-label", "Search");
       this._sendBtn.innerHTML = DISC_SEND_ICON;
 
-      controlsRow.appendChild(this._iconBtn);
       controlsRow.appendChild(this._sendBtn);
 
       this._bar.appendChild(inputRow);
@@ -124,14 +116,47 @@
       // first safe place to size and position the host itself.
       this.style.position = "fixed";
       this.style.left = "50%";
-      this.style.bottom = "max(20px, env(safe-area-inset-bottom, 20px))";
       this.style.transform = "translateX(-50%)";
       this.style.width = "min(640px, calc(100vw - 32px))";
       this.style.zIndex = "2147483647";
 
+      this._keyboardOffset = 0;
+      this._updateBottomOffset();
+      this._bindKeyboardOffset();
+
       bindPointerTracking(this._bar);
       bindPointerTracking(this._panel);
+      bindPressSpring(this._bar, 0.982, 260, 28, "center bottom");
+      bindPressSpring(this._sendBtn, 0.84, 380, 24, "center center");
       this._bindEvents();
+    }
+
+    // On-screen-keyboard avoidance (iOS/Android): visualViewport shrinks
+    // when the keyboard opens, so the bar is lifted by that exact delta
+    // instead of being covered. focusout is a fallback resync since
+    // visualViewport's resize event doesn't always fire on iPad after the
+    // keyboard closes.
+    _bindKeyboardOffset() {
+      var vv = window.visualViewport;
+      if (!vv) return;
+      var self = this;
+      var check = function () {
+        var kbHeight = window.innerHeight - vv.height - vv.offsetTop;
+        self._keyboardOffset = kbHeight > 150 ? Math.round(kbHeight) : 0;
+        self._updateBottomOffset();
+      };
+      vv.addEventListener("resize", check);
+      vv.addEventListener("scroll", check);
+      document.addEventListener("focusout", function () {
+        setTimeout(check, 150);
+      });
+    }
+
+    _updateBottomOffset() {
+      var base = "max(20px, env(safe-area-inset-bottom, 20px))";
+      this.style.bottom = this._keyboardOffset
+        ? "calc(" + base + " + " + this._keyboardOffset + "px)"
+        : base;
     }
 
     _bindEvents() {
@@ -141,7 +166,8 @@
       }, CONFIG.debounceMs);
 
       this._input.addEventListener("input", function () {
-        self._syncIconState();
+        self._autoGrow();
+        self._syncSendState();
         debouncedSearch();
       });
 
@@ -166,7 +192,9 @@
             e.preventDefault();
             self.moveActive(-1);
           }
-        } else if (e.key === "Enter") {
+        } else if (e.key === "Enter" && !e.shiftKey) {
+          // Shift+Enter falls through to the textarea's own default
+          // behavior (insert a newline) — only a plain Enter sends.
           e.preventDefault();
           var href = self.activeHref();
           if (href) {
@@ -184,24 +212,20 @@
         self._runSearch();
       });
 
-      this._iconBtn.addEventListener("click", function () {
-        if (self._input.value) {
-          self._input.value = "";
-          self._syncIconState();
-          self.close();
-        }
-        self._input.focus();
-      });
-
       document.addEventListener("click", function (e) {
         if (!self.contains(e.target)) self.close();
       });
     }
 
-    _syncIconState() {
-      var hasValue = this._input.value.length > 0;
-      this._iconBtn.innerHTML = hasValue ? DISC_CLEAR_ICON : DISC_WARDROBE_ICON;
-      this._iconBtn.setAttribute("aria-label", hasValue ? "Clear search" : "Disc");
+    // Grows the textarea up to 120px as content wraps, then it scrolls
+    // internally (scrollbar hidden via CSS, still keyboard/cursor
+    // navigable — a native <textarea> behavior, not something disabled).
+    _autoGrow() {
+      this._input.style.height = "auto";
+      this._input.style.height = Math.min(this._input.scrollHeight, 120) + "px";
+    }
+
+    _syncSendState() {
       this._sendBtn.disabled = this._input.value.trim().length < 2;
     }
 
@@ -213,6 +237,7 @@
         return;
       }
       this.showSkeleton();
+      this._setLoading(true);
       fetchResults(query)
         .then(
           function (data) {
@@ -225,7 +250,22 @@
             if (this._input.value.trim() !== query) return;
             this.showError();
           }.bind(this)
+        )
+        .then(
+          function () {
+            this._setLoading(false);
+          }.bind(this)
         );
+    }
+
+    // Busy state swaps the send button's arrow for a small square inside
+    // a bordered pill, matching the reference behavior — the textarea
+    // stays fully editable throughout, so a shopper can keep refining
+    // their next query while a request is still in flight.
+    _setLoading(isLoading) {
+      this._sendBtn.dataset.loading = isLoading ? "true" : "false";
+      this._sendBtn.innerHTML = isLoading ? DISC_BUSY_ICON : DISC_SEND_ICON;
+      this._sendBtn.setAttribute("aria-label", isLoading ? "Working" : "Search");
     }
 
     open() {
@@ -393,25 +433,12 @@
     );
   }
 
-  var DISC_WARDROBE_ICON =
-    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<rect x="5" y="3" width="14" height="16" rx="1.5" stroke="currentColor" stroke-width="1.6"/>' +
-    '<line x1="12" y1="3" x2="12" y2="19" stroke="currentColor" stroke-width="1.6"/>' +
-    '<line x1="9.5" y1="10" x2="9.5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
-    '<line x1="14.5" y1="10" x2="14.5" y2="12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
-    '<line x1="7.5" y1="19" x2="7.5" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
-    '<line x1="16.5" y1="19" x2="16.5" y2="21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>' +
-    "</svg>";
-
-  var DISC_CLEAR_ICON =
-    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
-    "</svg>";
-
   var DISC_SEND_ICON =
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
     '<path d="M12 19V5M12 5L6 11M12 5L18 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
     "</svg>";
+
+  var DISC_BUSY_ICON = '<span class="disc-busy-square" aria-hidden="true"></span>';
 
   var DISC_FOOTER_HTML =
     '<svg class="disc-footer-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
@@ -450,6 +477,52 @@
       el.style.setProperty("--disc-mx", "30%");
       el.style.setProperty("--disc-my", "0%");
       el.style.setProperty("--disc-rim-angle", "135deg");
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Spring-physics press "squish", ported from the reference component's
+  // useSpring hook: a real per-frame spring integration (critically-damped
+  // -ish, stepped at a fixed 1/60s regardless of actual frame rate — kept
+  // identical to the reference rather than made frame-rate-independent),
+  // not a CSS transition. Pressing an element scales it down; releasing
+  // springs it back, with slight overshoot depending on stiffness/damping.
+  // ---------------------------------------------------------------------
+  function bindPressSpring(el, pressedScale, stiffness, damping, transformOrigin) {
+    el.style.transformOrigin = transformOrigin;
+    el.style.willChange = "transform";
+
+    var target = 1;
+    var pos = 1;
+    var vel = 0;
+    var raf = null;
+
+    function tick() {
+      var disp = pos - target;
+      var acc = -stiffness * disp - damping * vel;
+      vel += acc / 60;
+      pos += vel / 60;
+      el.style.transform = "scale(" + pos + ")";
+      if (Math.abs(disp) > 5e-4 || Math.abs(vel) > 5e-4) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        raf = null;
+      }
+    }
+
+    function setTarget(next) {
+      target = next;
+      if (!raf) raf = requestAnimationFrame(tick);
+    }
+
+    el.addEventListener("pointerdown", function () {
+      setTarget(pressedScale);
+    });
+    el.addEventListener("pointerup", function () {
+      setTarget(1);
+    });
+    el.addEventListener("pointerleave", function () {
+      setTarget(1);
     });
   }
 
@@ -564,9 +637,9 @@
     }
 
     .disc-bar-row--input { display: flex; }
-    .disc-bar-row--controls { display: flex; align-items: center; justify-content: space-between; }
+    .disc-bar-row--controls { display: flex; align-items: center; justify-content: flex-end; }
 
-    .disc-bar-icon, .disc-send {
+    .disc-send {
       flex-shrink: 0;
       width: 44px;
       height: 44px;
@@ -578,17 +651,21 @@
       padding: 0;
       cursor: pointer;
       font: inherit;
-      transition: background-color 0.15s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.15s ease;
+      background: var(--disc-text);
+      color: var(--disc-accent-contrast);
+      /* transform is driven per-frame by the spring-physics press
+         animation (bindPressSpring), not this transition — animating
+         both would fight each other. */
+      transition: background-color 0.15s ease, opacity 0.15s ease;
     }
-    .disc-bar-icon svg, .disc-send svg { width: 18px; height: 18px; }
-    .disc-bar-icon { background: var(--disc-hover); color: var(--disc-text-secondary); }
-    .disc-bar-icon:hover { background-color: var(--disc-scrollbar); }
-    .disc-bar-icon:active { transform: scale(0.9); }
-
-    .disc-send { background: var(--disc-text); color: var(--disc-accent-contrast); }
-    .disc-send:hover:not(:disabled) { transform: scale(1.06); }
-    .disc-send:active:not(:disabled) { transform: scale(0.92); }
+    .disc-send svg { width: 18px; height: 18px; }
     .disc-send:disabled { background: rgba(120,120,128,0.18); color: var(--disc-text-secondary); cursor: default; opacity: 0.7; }
+    .disc-send[data-loading="true"] {
+      background: var(--disc-glass-top);
+      border: 1px solid var(--disc-divider);
+      cursor: default;
+    }
+    .disc-busy-square { width: 11px; height: 11px; border-radius: 3px; background: var(--disc-text); display: block; }
 
     .disc-input {
       flex: 1;
@@ -596,11 +673,16 @@
       border: none;
       outline: none;
       background: transparent;
+      resize: none;
+      overflow: hidden;
       font: inherit;
       font-size: 16.5px;
       font-weight: 480;
+      line-height: 1.5;
       color: var(--disc-text);
       padding: 2px;
+      min-height: 24px;
+      max-height: 120px;
     }
     .disc-input::placeholder { color: var(--disc-text-secondary); }
 
@@ -611,8 +693,11 @@
       bottom: calc(100% + 12px);
       border-radius: 26px;
       /* Capped by viewport height too, so a short landscape-phone screen
-         never has the panel taller than there's room for above the bar. */
-      max-height: min(420px, 60dvh);
+         never has the panel taller than there's room for above the bar.
+         52dvh (not 60) leaves headroom for the bar's own height plus its
+         bottom offset and the 12px gap above it — verify against a short
+         landscape viewport (~375px tall) if this ever gets tuned again. */
+      max-height: min(420px, 52dvh);
       overflow-y: auto;
       overflow-x: hidden;
       opacity: 0;

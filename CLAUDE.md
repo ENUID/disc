@@ -86,16 +86,55 @@ exactly one visible, usable search entry point on the page — Disc's own.
    the shadow root, never into the host document's `<head>`.
 4. The results panel opens **upward** (`position: absolute; bottom:
    calc(100% + 12px)`) since the bar sits at the bottom of the viewport.
-   Its `max-height` is capped at `min(420px, 60dvh)` so it can't overflow
+   Its `max-height` is capped at `min(420px, 52dvh)` so it can't overflow
    a short viewport (e.g. a phone in landscape) — check this if you ever
-   see it clipped or the bar itself pushed off-screen.
-5. Sizing is meant to hold up across the full device range (phone
+   see it clipped or the bar itself pushed off-screen. The percentage has
+   headroom baked in for the bar's own height + its bottom offset + the
+   gap above it; it's been tuned down once already (60 -> 52) after the
+   bar grew a few px taller and started clipping on a 375px-tall
+   landscape viewport, so re-verify at that size if the bar's height
+   changes again.
+5. The bar's input is a `<textarea>` (not a single-line `<input>`), auto-
+   growing up to 120px via `_autoGrow()` on the `input` event, then
+   scrolling internally (scrollbar hidden via CSS `overflow: hidden`, but
+   still keyboard/cursor-navigable — that's native `<textarea>` behavior,
+   not something disabled). Plain `Enter` sends; `Shift+Enter` inserts a
+   newline by falling through to the textarea's own default handling.
+6. `bindPressSpring()` drives a real per-frame spring integration (ported
+   from a reference React implementation's `useSpring` hook, kept
+   numerically identical rather than made frame-rate-independent) for the
+   "squish on press, spring back on release" feel on both the bar and the
+   send button — not a CSS transition. Because it sets `el.style.transform`
+   directly every frame, nothing else may put `transform` in that
+   element's own `transition` list (they'd fight each other); the send
+   button's CSS transition intentionally only covers
+   `background-color`/`opacity`.
+7. `_setLoading(true/false)` swaps the send button to a busy state
+   (bordered pill + small square) while a request is in flight, without
+   ever disabling the textarea — a shopper can keep refining their next
+   query underneath it. This fires for every debounced type-ahead search,
+   not just an explicit send, so it doubles as a lightweight "thinking"
+   indicator.
+8. `_bindKeyboardOffset()` tracks `window.visualViewport` so the bar lifts
+   above the on-screen keyboard on iOS/Android instead of being covered by
+   it, adding the delta on top of the normal `safe-area-inset-bottom`
+   offset. `focusout` is a fallback resync, since `visualViewport`'s
+   resize event doesn't always fire on iPad after the keyboard closes.
+9. Sizing is meant to hold up across the full device range (phone
    portrait/landscape, tablet, desktop) without a device-specific branch:
    the `min()`/`env()`-based host sizing and the panel's `dvh`-capped
    height are what do that work. Verify any future CSS change against at
    least a narrow phone (~320–375px), a short landscape phone (~375px
    tall), and a wide desktop viewport — it's cheap to check with
    Playwright and easy to silently break one of them while fixing another.
+
+There is no photo-attachment/visual-search capability, deliberately. A
+reference implementation this was ported from had one (attach a photo,
+search visually against it), but our backend has no image-embedding
+pipeline, and the user explicitly asked for that icon to be removed
+rather than have a button that looks functional but does nothing. Don't
+re-add an attach button without both a real backend capability behind it
+and the user asking for it.
 
 ### Design system
 
