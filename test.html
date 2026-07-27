@@ -49,8 +49,10 @@
       <nav>Shop / About / Cart (0)</nav>
     </header>
 
-    <!-- This mimics a stock Shopify theme's predictive search form. Disc
-         must hijack this exact input without adding a second search box. -->
+    <!-- This mimics a stock Shopify theme's own search form. Disc never
+         touches it — the store stays exactly as it is. Disc adds a
+         completely separate, persistent conversational bar docked to the
+         bottom of the viewport instead. -->
     <form action="/search" method="get" role="search">
       <input
         type="search"
@@ -60,8 +62,12 @@
       />
     </form>
     <p class="hint">
-      Try: "I need a breathable layer for a humid beach vacation"
+      That search box above is the theme's own, untouched by Disc. Try
+      typing into the Disc bar at the bottom of the page instead: "I need
+      a breathable layer for a humid beach vacation"
     </p>
+
+    <div style="height: 100px"></div>
 
     <script src="frontend/disc-widget.js" data-api-url="http://localhost:8000"></script>
   </body>

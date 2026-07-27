@@ -3,10 +3,16 @@
 ## What this is
 
 Disc is a B2B product from Enuid Labs. Shopify merchants install a single
-`<script>` tag and their native storefront search silently becomes an
-AI-powered semantic intent engine. There is no new UI chrome to configure —
-Disc hijacks the merchant's existing search input and renders results in a
-floating overlay.
+`<script>` tag and get a persistent AI-powered conversational search bar
+docked to the bottom of the viewport. **The store itself is never
+touched** — Disc does not hijack, restyle, or intercept the theme's own
+native search. It's a second, independent, always-visible entry point,
+not a replacement for anything already on the page.
+
+(An earlier iteration of this widget hijacked the theme's native search
+input instead of adding its own bar. That approach is gone — don't
+reintroduce DOM-scanning/hijack logic without checking with the user
+first, since moving away from it was a deliberate product decision.)
 
 Product name is **Disc** everywhere: package name, web component tag,
 CSS class prefixes, file names, log lines, comments. Never "Discern",
@@ -46,34 +52,52 @@ test_search.py    -> scripted test hitting POST /search with a real intent query
 
 ### Frontend — the widget contract
 
-**Critical rule: no double search bars.** Disc never renders its own
-visible `<input>`. It must not duplicate the merchant's search box.
+**Critical rule: the store stays the same.** Disc adds exactly one new
+element to the page and touches nothing else — no restyling the theme, no
+intercepting its search form, no second input competing with the native
+one for the same spot on the page.
 
-1. A `DOMScanner` polls every 500ms for a native input matching
-   `input[name="q"], input[type="search"]` (extend selectors as needed
-   per-theme). Once found, the interval is cleared — scanning never runs
-   forever.
-2. Disc attaches listeners directly to that native input: `focus`,
-   `input` (300ms debounced fetch), and `keydown` for Enter. It also
-   listens for the enclosing `<form>` `submit` and calls
-   `e.preventDefault()` so the native Shopify search page never loads
-   underneath the overlay.
-3. All rendered UI — the dropdown, skeleton loaders, result cards — lives
-   inside a single `<disc-search-overlay>` custom element with an open
-   `attachShadow({ mode: "open" })` root. Shadow DOM is what gives CSS
-   isolation on an arbitrary, unknown Shopify theme; styles are injected
-   as a `<style>` tag inside the shadow root, never into the host
-   document's `<head>`.
-4. The overlay is absolutely positioned directly beneath the native input
-   (computed from `getBoundingClientRect()`), not injected inline into the
-   theme's DOM tree.
+1. `<disc-search-bar>` is a single custom element, appended to `<body>`
+   once on page load (or `DOMContentLoaded` if the script runs before the
+   body exists). No DOM scanning, no waiting for a native element —
+   Disc owns its input from the start and the bar is present for the
+   whole page lifetime.
+2. The host element is `position: fixed`, centered near the bottom of the
+   viewport (`bottom: max(20px, env(safe-area-inset-bottom))`). Only the
+   results panel above it opens and closes; the bar itself never
+   disappears.
+3. All rendered UI — the input, the results panel, skeleton loaders,
+   result cards — lives inside that one element's `attachShadow({ mode:
+   "open" })` root. Shadow DOM is what gives CSS isolation on an
+   arbitrary, unknown Shopify theme; styles are injected as a `<style>`
+   tag inside the shadow root, never into the host document's `<head>`.
+4. The results panel is positioned with plain CSS (`position: absolute;
+   bottom: calc(100% + 12px)`) relative to the bar, inside the same
+   shadow root — no `getBoundingClientRect` math needed, since both live
+   in the same fixed-position container.
 
 ### Design system
 
-Monochrome premium fashion-OS look: black/white/gray palette, `Inter` /
-`system-ui` font stack, 1px hairline borders, `backdrop-filter: blur(12px)`
-glassmorphism, 0.2s ease opacity transitions, skeleton-loader shimmer while
-a request is in flight.
+Liquid Glass: monochrome black/white/gray palette, `-apple-system`/`Inter`
+font stack, real live `backdrop-filter: blur(30px) saturate(200%)` (actual
+pixels behind the widget, not a screenshot), a pointer-tracked specular
+highlight, a light-catching gradient rim, layered ambient/contact shadows,
+spring-eased motion (`cubic-bezier(0.34, 1.56, 0.64, 1)`), and a one-shot
+diagonal sheen on open. True optical refraction (geometric lensing of the
+background) is deliberately not attempted — the only CSS route there is a
+noisy SVG turbulence filter that silently fails on browsers without
+support for filters inside `backdrop-filter`, which isn't acceptable for
+a widget embedded on arbitrary merchant storefronts.
+
+Two things worth remembering if you touch the CSS again:
+- The specular highlight and sheen use plain alpha compositing, not
+  `mix-blend-mode: overlay`/`soft-light` — those blend modes go nearly
+  invisible against an already-light base, which is exactly this
+  widget's light-mode surface.
+- All panel text inherits a subtle `text-shadow` from `.disc-root`. A
+  translucent glass panel has no guaranteed contrast against whatever
+  backdrop happens to blur through it, so text carries its own shadow as
+  a legibility safety net rather than relying on the glass tint alone.
 
 ## Local dev
 
@@ -85,8 +109,9 @@ uvicorn server:app --reload --port 8000
 ```
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
-points it at `http://localhost:8000`) to exercise the full hijack + search
-flow against a fake Shopify search form.
+points it at `http://localhost:8000`) to see the persistent bar at the
+bottom of the page and confirm the fake theme's own search form above it
+is completely untouched.
 
 `python test_search.py` sends a real intent query straight to `POST
 /search` and asserts on the ranking (semantic search should rank "Olive

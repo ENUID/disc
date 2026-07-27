@@ -2,14 +2,14 @@
  * Disc — Intent Search Widget
  * https://enuidlabs.com/disc
  *
- * Drop-in script that upgrades a Shopify theme's native search input into
- * an AI-powered semantic intent engine. It never renders a second visible
- * search box: it finds the theme's existing input, hijacks its events, and
- * renders results in a Shadow DOM overlay positioned beneath it.
+ * A single persistent conversational bar docked to the bottom of the
+ * viewport. It never touches the merchant's theme or its native search —
+ * the store stays exactly as it is. Disc is purely additive: one clean
+ * pill-shaped input, and a results panel that opens upward above it.
  *
- * The overlay's material is a CSS approximation of Apple's Liquid Glass:
- * live backdrop blur+saturation (real pixels behind it, not a screenshot),
- * a pointer-tracked specular highlight, a light-catching gradient rim,
+ * The material is a CSS approximation of Apple's Liquid Glass: real live
+ * backdrop blur+saturation (actual pixels behind it, not a screenshot), a
+ * pointer-tracked specular highlight, a light-catching gradient rim,
  * layered ambient/contact shadows, and spring-eased motion. True optical
  * refraction (geometric lensing of the background) isn't reproducible in
  * CSS without a noisy, unreliable SVG turbulence filter, so it's
@@ -29,21 +29,22 @@
       (CURRENT_SCRIPT && CURRENT_SCRIPT.dataset.apiUrl) ||
       (window.DiscConfig && window.DiscConfig.apiUrl) ||
       "http://localhost:8000",
-    searchSelectors: 'input[name="q"], input[type="search"]',
-    scanIntervalMs: 500,
     debounceMs: 300,
     resultLimit: 5,
   };
 
   // ---------------------------------------------------------------------
-  // <disc-search-overlay> — the entire rendered UI lives in its Shadow DOM.
+  // <disc-search-bar> — the entire bar + results panel live in its Shadow
+  // DOM. The host is fixed to the bottom of the viewport for the whole
+  // page lifetime; only the results panel opens and closes.
   // ---------------------------------------------------------------------
-  class DiscSearchOverlay extends HTMLElement {
+  class DiscSearchBar extends HTMLElement {
     constructor() {
       super();
       this._root = this.attachShadow({ mode: "open" });
       this._activeIndex = -1;
       this._results = [];
+      this._lastQuery = "";
       this._buildDom();
     }
 
@@ -51,12 +52,12 @@
       var style = document.createElement("style");
       style.textContent = DISC_STYLES;
 
+      var wrap = document.createElement("div");
+      wrap.className = "disc-root";
+
       this._panel = document.createElement("div");
       this._panel.className = "disc-panel";
       this._panel.setAttribute("role", "listbox");
-      this._panel.style.setProperty("--disc-mx", "30%");
-      this._panel.style.setProperty("--disc-my", "0%");
-      this._panel.style.setProperty("--disc-rim-angle", "135deg");
 
       this._list = document.createElement("div");
       this._list.className = "disc-list";
@@ -69,8 +70,38 @@
       this._panel.appendChild(this._list);
       this._panel.appendChild(this._footer);
 
+      this._bar = document.createElement("div");
+      this._bar.className = "disc-bar";
+
+      this._iconBtn = document.createElement("button");
+      this._iconBtn.type = "button";
+      this._iconBtn.className = "disc-bar-icon";
+      this._iconBtn.setAttribute("aria-label", "Clear search");
+      this._iconBtn.innerHTML = DISC_BRAND_ICON;
+
+      this._input = document.createElement("input");
+      this._input.type = "text";
+      this._input.className = "disc-input";
+      this._input.placeholder = "What are you looking for?";
+      this._input.autocomplete = "off";
+      this._input.setAttribute("aria-label", "Search products");
+
+      this._sendBtn = document.createElement("button");
+      this._sendBtn.type = "button";
+      this._sendBtn.className = "disc-send";
+      this._sendBtn.disabled = true;
+      this._sendBtn.setAttribute("aria-label", "Search");
+      this._sendBtn.innerHTML = DISC_SEND_ICON;
+
+      this._bar.appendChild(this._iconBtn);
+      this._bar.appendChild(this._input);
+      this._bar.appendChild(this._sendBtn);
+
+      wrap.appendChild(this._panel);
+      wrap.appendChild(this._bar);
+
       this._root.appendChild(style);
-      this._root.appendChild(this._panel);
+      this._root.appendChild(wrap);
     }
 
     connectedCallback() {
@@ -78,72 +109,127 @@
       // constructor (the Custom Elements spec forbids it) — this is the
       // first safe place to size and position the host itself.
       this.style.position = "fixed";
+      this.style.left = "50%";
+      this.style.bottom = "max(20px, env(safe-area-inset-bottom, 20px))";
+      this.style.transform = "translateX(-50%)";
+      this.style.width = "min(640px, calc(100vw - 32px))";
       this.style.zIndex = "2147483647";
-      this.style.display = "none";
-      this._bindPointerTracking();
+
+      bindPointerTracking(this._bar);
+      bindPointerTracking(this._panel);
+      this._bindEvents();
     }
 
-    _bindPointerTracking() {
-      var panel = this._panel;
-      var canTrack = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
-      if (!canTrack) return; // touch devices keep the fixed default highlight position
+    _bindEvents() {
+      var self = this;
+      var debouncedSearch = debounce(function () {
+        self._runSearch();
+      }, CONFIG.debounceMs);
 
-      var raf = null;
-      panel.addEventListener("pointermove", function (e) {
-        if (raf) return;
-        raf = requestAnimationFrame(function () {
-          raf = null;
-          var rect = panel.getBoundingClientRect();
-          if (!rect.width || !rect.height) return;
-          var px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
-          var py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
-          var angle = (Math.atan2(py - 50, px - 50) * 180) / Math.PI + 90;
-          panel.style.setProperty("--disc-mx", px.toFixed(1) + "%");
-          panel.style.setProperty("--disc-my", py.toFixed(1) + "%");
-          panel.style.setProperty("--disc-rim-angle", angle.toFixed(1) + "deg");
-        });
+      this._input.addEventListener("input", function () {
+        self._syncIconState();
+        debouncedSearch();
       });
-      panel.addEventListener("pointerleave", function () {
-        panel.style.setProperty("--disc-mx", "30%");
-        panel.style.setProperty("--disc-my", "0%");
-        panel.style.setProperty("--disc-rim-angle", "135deg");
+
+      this._input.addEventListener("focus", function () {
+        if (self._input.value.trim().length >= 2) {
+          if (self._results.length) {
+            self.open();
+          } else {
+            self._runSearch();
+          }
+        }
+      });
+
+      this._input.addEventListener("keydown", function (e) {
+        if (e.key === "ArrowDown") {
+          if (self.isOpen()) {
+            e.preventDefault();
+            self.moveActive(1);
+          }
+        } else if (e.key === "ArrowUp") {
+          if (self.isOpen()) {
+            e.preventDefault();
+            self.moveActive(-1);
+          }
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          var href = self.activeHref();
+          if (href) {
+            window.location.href = href;
+          } else {
+            self._runSearch();
+          }
+        } else if (e.key === "Escape") {
+          self.close();
+          self._input.blur();
+        }
+      });
+
+      this._sendBtn.addEventListener("click", function () {
+        self._runSearch();
+      });
+
+      this._iconBtn.addEventListener("click", function () {
+        if (self._input.value) {
+          self._input.value = "";
+          self._syncIconState();
+          self.close();
+        }
+        self._input.focus();
+      });
+
+      document.addEventListener("click", function (e) {
+        if (!self.contains(e.target)) self.close();
       });
     }
 
-    positionUnder(inputEl) {
-      var rect = inputEl.getBoundingClientRect();
-      this.style.left = rect.left + "px";
-      this.style.top = rect.bottom + 8 + "px";
-      this.style.width = rect.width + "px";
+    _syncIconState() {
+      var hasValue = this._input.value.length > 0;
+      this._iconBtn.innerHTML = hasValue ? DISC_CLEAR_ICON : DISC_BRAND_ICON;
+      this._iconBtn.setAttribute("aria-label", hasValue ? "Clear search" : "Disc");
+      this._sendBtn.disabled = this._input.value.trim().length < 2;
+    }
+
+    _runSearch() {
+      var query = this._input.value.trim();
+      this._lastQuery = query;
+      if (query.length < 2) {
+        this.close();
+        return;
+      }
+      this.showSkeleton();
+      fetchResults(query)
+        .then(
+          function (data) {
+            if (this._input.value.trim() !== query) return; // stale response, a newer query is in flight
+            this.renderResults(data.results, query);
+          }.bind(this)
+        )
+        .catch(
+          function () {
+            if (this._input.value.trim() !== query) return;
+            this.showError();
+          }.bind(this)
+        );
     }
 
     open() {
-      this.style.display = "block";
-      requestAnimationFrame(
-        function () {
-          this._panel.classList.add("disc-panel--visible");
-        }.bind(this)
-      );
+      this._panel.classList.add("disc-panel--visible");
     }
 
     close() {
       this._panel.classList.remove("disc-panel--visible");
       this._activeIndex = -1;
-      var self = this;
-      setTimeout(function () {
-        self.style.display = "none";
-      }, 220);
     }
 
     isOpen() {
-      return this.style.display !== "none";
+      return this._panel.classList.contains("disc-panel--visible");
     }
 
     // Swaps the scrollable content. If the panel is already visible, the
     // old content fades out before the new content fades in so a
-    // skeleton -> results transition never feels like a jump-cut. If the
-    // panel isn't visible yet there's nothing on screen to crossfade from,
-    // so the content is set immediately and open() handles the entrance.
+    // skeleton -> results transition never feels like a jump-cut.
     _setContent(html, footerVisible) {
       var list = this._list;
       var footer = this._footer;
@@ -178,6 +264,7 @@
     }
 
     showEmpty(query) {
+      this._results = [];
       this._setContent(
         '<div class="disc-empty">No matches for “' +
           escapeHtml(query) +
@@ -188,6 +275,7 @@
     }
 
     showError() {
+      this._results = [];
       this._setContent(
         '<div class="disc-empty">Disc search is temporarily unavailable.</div>',
         true
@@ -266,7 +354,7 @@
     }
   }
 
-  customElements.define("disc-search-overlay", DiscSearchOverlay);
+  customElements.define("disc-search-bar", DiscSearchBar);
 
   function escapeHtml(str) {
     var div = document.createElement("div");
@@ -284,12 +372,28 @@
     return (
       '<span class="disc-item-signal">' +
       SIGNAL_BAR_HEIGHTS.map(function (height, i) {
-        var lit = i < activeCount ? "disc-bar--lit" : "disc-bar--dim";
-        return '<span class="disc-bar ' + lit + '" style="height:' + height + '%"></span>';
+        var lit = i < activeCount ? "disc-signal-bar--lit" : "disc-signal-bar--dim";
+        return '<span class="disc-signal-bar ' + lit + '" style="height:' + height + '%"></span>';
       }).join("") +
       "</span>"
     );
   }
+
+  var DISC_BRAND_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.6"/>' +
+    '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
+    "</svg>";
+
+  var DISC_CLEAR_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M6 6L18 18M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+    "</svg>";
+
+  var DISC_SEND_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M12 19V5M12 5L6 11M12 5L18 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>' +
+    "</svg>";
 
   var DISC_FOOTER_HTML =
     '<svg class="disc-footer-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
@@ -297,6 +401,39 @@
     '<circle cx="12" cy="12" r="3" fill="currentColor"/>' +
     "</svg>" +
     "<span>Search by <span class=\"disc-brand\">Disc</span></span>";
+
+  // ---------------------------------------------------------------------
+  // Pointer-tracked specular highlight, shared by the bar and the panel.
+  // Plain alpha compositing (no mix-blend-mode) so it stays visible
+  // regardless of what's behind the glass: overlay/soft-light both go
+  // nearly invisible against an already-light base, which is exactly this
+  // widget's light-mode surface.
+  // ---------------------------------------------------------------------
+  function bindPointerTracking(el) {
+    var canTrack = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    if (!canTrack) return; // touch devices keep the fixed default highlight position
+
+    var raf = null;
+    el.addEventListener("pointermove", function (e) {
+      if (raf) return;
+      raf = requestAnimationFrame(function () {
+        raf = null;
+        var rect = el.getBoundingClientRect();
+        if (!rect.width || !rect.height) return;
+        var px = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+        var py = Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100));
+        var angle = (Math.atan2(py - 50, px - 50) * 180) / Math.PI + 90;
+        el.style.setProperty("--disc-mx", px.toFixed(1) + "%");
+        el.style.setProperty("--disc-my", py.toFixed(1) + "%");
+        el.style.setProperty("--disc-rim-angle", angle.toFixed(1) + "deg");
+      });
+    });
+    el.addEventListener("pointerleave", function () {
+      el.style.setProperty("--disc-mx", "30%");
+      el.style.setProperty("--disc-my", "0%");
+      el.style.setProperty("--disc-rim-angle", "135deg");
+    });
+  }
 
   // ---------------------------------------------------------------------
   // Liquid Glass design system, scoped entirely to the Shadow DOM — none
@@ -336,6 +473,7 @@
       --disc-specular: rgba(255,255,255,0.85);
       --disc-specular-opacity: 0.4;
       --disc-text-shadow: rgba(255,255,255,0.55);
+      --disc-accent-contrast: #ffffff;
     }
 
     @media (prefers-color-scheme: dark) {
@@ -354,21 +492,24 @@
         --disc-specular: rgba(255,255,255,0.4);
         --disc-specular-opacity: 0.3;
         --disc-text-shadow: rgba(0,0,0,0.45);
+        --disc-accent-contrast: #1d1d1f;
       }
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
-    .disc-panel {
+    .disc-root {
       position: relative;
-      isolation: isolate;
+      width: 100%;
       font-family: -apple-system, "SF Pro Text", Inter, system-ui, "Segoe UI", sans-serif;
       color: var(--disc-text);
-      /* A translucent panel has no guaranteed contrast against whatever
-         backdrop happens to blur through it, so text carries its own
-         subtle shadow for edge contrast, inherited by every descendant. */
       text-shadow: 0 1px 2px var(--disc-text-shadow);
-      border-radius: 26px;
+    }
+
+    /* Shared glass material for both the bar and the results panel. */
+    .disc-bar, .disc-panel {
+      position: relative;
+      isolation: isolate;
       border: 1px solid transparent;
       background-image:
         linear-gradient(180deg, var(--disc-glass-top), var(--disc-glass-bottom)),
@@ -383,31 +524,9 @@
         0 10px 22px -8px var(--disc-shadow-contact),
         inset 0 1px 0 rgba(255,255,255,0.65),
         inset 0 -1px 0 rgba(0,0,0,0.05);
-      max-height: 420px;
-      overflow-y: auto;
-      overflow-x: hidden;
-      opacity: 0;
-      transform: translateY(-8px) scale(0.97);
-      transform-origin: top center;
-      transition:
-        opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-        transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
-      scrollbar-width: thin;
-      scrollbar-color: var(--disc-scrollbar) transparent;
     }
 
-    .disc-panel--visible { opacity: 1; transform: translateY(0) scale(1); }
-
-    .disc-panel::-webkit-scrollbar { width: 6px; }
-    .disc-panel::-webkit-scrollbar-track { background: transparent; }
-    .disc-panel::-webkit-scrollbar-thumb { background: var(--disc-scrollbar); border-radius: 3px; }
-
-    /* Pointer-tracked specular highlight — the "light hitting glass" cue.
-       Plain alpha compositing (no mix-blend-mode) so it stays visible
-       regardless of what's behind the glass: overlay/soft-light both go
-       nearly invisible against an already-light base, which is exactly
-       the surface color this widget uses in light mode. */
-    .disc-panel::before {
+    .disc-bar::before, .disc-panel::before {
       content: "";
       position: absolute;
       inset: 0;
@@ -418,7 +537,79 @@
       transition: --disc-mx 0.45s ease, --disc-my 0.45s ease, --disc-rim-angle 0.45s ease;
     }
 
-    /* One-shot diagonal sheen that sweeps across the panel on open. */
+    .disc-bar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 6px 6px 20px;
+      border-radius: 9999px;
+    }
+
+    .disc-bar-icon, .disc-send {
+      flex-shrink: 0;
+      width: 34px;
+      height: 34px;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      font: inherit;
+      transition: background-color 0.15s ease, transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.15s ease;
+    }
+    .disc-bar-icon svg, .disc-send svg { width: 16px; height: 16px; }
+    .disc-bar-icon { background: transparent; color: var(--disc-text-secondary); }
+    .disc-bar-icon:hover { background-color: var(--disc-hover); }
+    .disc-bar-icon:active { transform: scale(0.9); }
+
+    .disc-send { background: var(--disc-text); color: var(--disc-accent-contrast); }
+    .disc-send:hover:not(:disabled) { transform: scale(1.06); }
+    .disc-send:active:not(:disabled) { transform: scale(0.92); }
+    .disc-send:disabled { background: rgba(120,120,128,0.18); color: var(--disc-text-secondary); cursor: default; opacity: 0.7; }
+
+    .disc-input {
+      flex: 1;
+      min-width: 0;
+      border: none;
+      outline: none;
+      background: transparent;
+      font: inherit;
+      font-size: 15px;
+      font-weight: 480;
+      color: var(--disc-text);
+      padding: 9px 2px;
+    }
+    .disc-input::placeholder { color: var(--disc-text-secondary); }
+
+    .disc-panel {
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: calc(100% + 12px);
+      border-radius: 26px;
+      max-height: 420px;
+      overflow-y: auto;
+      overflow-x: hidden;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px) scale(0.97);
+      transform-origin: bottom center;
+      transition:
+        opacity 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+        transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+      scrollbar-width: thin;
+      scrollbar-color: var(--disc-scrollbar) transparent;
+    }
+
+    .disc-panel--visible { opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
+
+    .disc-panel::-webkit-scrollbar { width: 6px; }
+    .disc-panel::-webkit-scrollbar-track { background: transparent; }
+    .disc-panel::-webkit-scrollbar-thumb { background: var(--disc-scrollbar); border-radius: 3px; }
+
+    /* One-shot diagonal sheen that sweeps across the panel each time it opens. */
     .disc-panel::after {
       content: "";
       position: absolute;
@@ -499,9 +690,9 @@
     /* Match-confidence indicator, styled like a signal-strength glyph
        rather than a loading-bar-style meter. */
     .disc-item-signal { display: flex; align-items: flex-end; gap: 2px; height: 11px; }
-    .disc-bar { width: 2.5px; border-radius: 1px; background: var(--disc-text); }
-    .disc-bar--lit { opacity: 0.75; }
-    .disc-bar--dim { opacity: 0.2; }
+    .disc-signal-bar { width: 2.5px; border-radius: 1px; background: var(--disc-text); }
+    .disc-signal-bar--lit { opacity: 0.75; }
+    .disc-signal-bar--dim { opacity: 0.2; }
 
     .disc-empty { padding: 30px 18px; font-size: 13px; color: var(--disc-text-secondary); text-align: center; line-height: 1.4; }
 
@@ -577,107 +768,18 @@
   }
 
   // ---------------------------------------------------------------------
-  // Hijack: attach to the native input without ever rendering a second one.
+  // Disc owns its own input from the start, so there's nothing to wait
+  // for or scan the DOM for — the bar mounts once and stays for the life
+  // of the page, completely independent of the theme's own search.
   // ---------------------------------------------------------------------
-  function hijackInput(input) {
-    if (input.dataset.discHijacked) return;
-    input.dataset.discHijacked = "true";
-
-    var overlay = document.createElement("disc-search-overlay");
-    document.body.appendChild(overlay);
-
-    var reposition = function () {
-      if (overlay.isOpen()) overlay.positionUnder(input);
-    };
-    window.addEventListener("scroll", reposition, true);
-    window.addEventListener("resize", reposition);
-
-    var runSearch = function () {
-      var query = input.value.trim();
-      if (query.length < 2) {
-        overlay.close();
-        return;
-      }
-      overlay.positionUnder(input);
-      overlay.showSkeleton();
-      fetchResults(query)
-        .then(function (data) {
-          if (input.value.trim() !== query) return; // stale response, a newer query is in flight
-          overlay.renderResults(data.results, query);
-        })
-        .catch(function () {
-          overlay.showError();
-        });
-    };
-
-    var debouncedSearch = debounce(runSearch, CONFIG.debounceMs);
-
-    input.addEventListener("input", debouncedSearch);
-
-    input.addEventListener("focus", function () {
-      if (input.value.trim().length >= 2) {
-        overlay.positionUnder(input);
-        overlay.open();
-      }
-    });
-
-    input.addEventListener("keydown", function (e) {
-      if (!overlay.isOpen()) return;
-      if (e.key === "ArrowDown") {
-        e.preventDefault();
-        overlay.moveActive(1);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        overlay.moveActive(-1);
-      } else if (e.key === "Enter") {
-        var href = overlay.activeHref();
-        if (href) {
-          e.preventDefault();
-          window.location.href = href;
-        }
-        // If nothing is highlighted, Enter is prevented by the form
-        // submit handler below and the top result stands as the answer.
-      } else if (e.key === "Escape") {
-        overlay.close();
-      }
-    });
-
-    // The critical hijack: stop the native Shopify search page navigation.
-    var form = input.closest("form");
-    if (form) {
-      form.addEventListener("submit", function (e) {
-        e.preventDefault();
-        var href = overlay.activeHref();
-        if (href) {
-          window.location.href = href;
-        }
-      });
-    }
-
-    document.addEventListener("click", function (e) {
-      if (e.target !== input && !overlay.contains(e.target)) {
-        overlay.close();
-      }
-    });
-  }
-
-  // ---------------------------------------------------------------------
-  // DOMScanner — polls for the native search input until it appears, then
-  // stops. Handles themes that render search chrome after Disc loads.
-  // ---------------------------------------------------------------------
-  function scanForSearchInput() {
-    var interval = setInterval(function () {
-      var input = document.querySelector(CONFIG.searchSelectors);
-      if (input) {
-        clearInterval(interval);
-        hijackInput(input);
-      }
-    }, CONFIG.scanIntervalMs);
+  function init() {
+    if (document.querySelector("disc-search-bar")) return;
+    document.body.appendChild(document.createElement("disc-search-bar"));
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", scanForSearchInput);
+    document.addEventListener("DOMContentLoaded", init);
   } else {
-    scanForSearchInput();
+    init();
   }
 })();
