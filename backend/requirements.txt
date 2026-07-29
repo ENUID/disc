@@ -4,3 +4,4 @@ lancedb
 fastembed
 pydantic
 requests
+pyarrow

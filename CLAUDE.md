@@ -36,14 +36,21 @@ and is wrong everywhere it appears now.
 
 ```
 /backend
-  ingest.py       -> builds the LanceDB vector table from the product catalog
-  server.py       -> FastAPI app, POST /search
+  ingest.py               -> builds the DEMO LanceDB table (backend/data/disc_lancedb) from
+                              the 15-item sample catalog — used when no shop is registered,
+                              e.g. this repo's own test.html
+  server.py               -> FastAPI app: POST /search, OAuth install flow, webhooks
+  db.py                   -> SQLite shop registry (shop -> access token, sync status)
+  shopify_auth.py         -> OAuth authorize-URL building, token exchange, HMAC verification
+  multi_tenant_ingest.py  -> per-shop catalog ingestion via the Admin API
+  test_multi_tenant.py    -> HMAC + parsing + per-shop isolation tests (no real credentials needed)
   requirements.txt
-  data/           -> generated LanceDB directory (gitignored; rebuild with `python ingest.py`)
+  data/                   -> gitignored: disc_lancedb (demo), disc_lancedb_multi (per real shop,
+                              one LanceDB table each), shops.db (SQLite)
 /frontend
   disc-widget.js  -> the entire client: Web Component + Shadow DOM + native-input takeover
 test.html         -> a fake Shopify PDP/search page for local end-to-end testing
-test_search.py    -> scripted test hitting POST /search with a real intent query
+test_search.py    -> scripted test hitting POST /search with a real intent query (demo catalog)
 ```
 
 ### Backend
@@ -62,6 +69,68 @@ test_search.py    -> scripted test hitting POST /search with a real intent query
   times out, `generate_ai_reasoning()` catches the failure and falls back
   to a deterministic templated sentence — the API contract to the widget
   never changes shape based on whether Ollama is up.
+
+### Multi-tenant Shopify app — how one install becomes that store's AI
+
+This is what makes Disc *that particular store's* AI rather than a demo:
+a real Shopify OAuth app, one isolated LanceDB table per installed shop,
+built from that shop's actual Admin API catalog and kept in sync by
+product webhooks.
+
+1. **Install**: merchant hits `GET /auth?shop=xyz.myshopify.com` ->
+   redirected to Shopify's OAuth consent screen -> Shopify redirects back
+   to `GET /auth/callback` with a `code` and an `hmac`-signed query
+   string. `shopify_auth.verify_oauth_callback_hmac()` rejects anything
+   not actually signed by Shopify; a `state` token (stored in the
+   in-process `_oauth_states` dict) guards against CSRF. The code is
+   exchanged for a permanent Admin API access token
+   (`shopify_auth.exchange_code_for_token`), stored in `db.py`'s SQLite
+   `shops` table, and product webhooks are registered
+   (`shopify_auth.register_webhooks`).
+2. **First ingestion** runs as a `BackgroundTasks` job right after
+   install (`_run_full_ingestion` in `server.py`) so the OAuth redirect
+   itself returns immediately rather than blocking on however long the
+   catalog takes to embed. `multi_tenant_ingest.ingest_shop()` paginates
+   `GET /admin/api/2024-01/products.json` via the response's `Link`
+   header, strips HTML from `body_html`, embeds every product, and
+   `mode="overwrite"`s a table named `shop_<sanitized-domain>` in
+   `backend/data/disc_lancedb_multi`.
+3. **Staying in sync**: `products/create` and `products/update` webhooks
+   re-embed just the one changed product (`upsert_product` — delete the
+   old row by id, add the new one) rather than re-ingesting the whole
+   catalog; `products/delete` removes it; `app/uninstalled` and the
+   mandatory `shop/redact` GDPR webhook both drop the shop's table and
+   its `shops.db` row entirely. Every webhook handler verifies
+   `X-Shopify-Hmac-Sha256` against the **raw** request body
+   (`shopify_auth.verify_webhook_hmac`) before touching the payload —
+   parse-then-verify would let a forged request through.
+4. **`POST /search`** takes an optional `shop` field. `_resolve_table()`
+   is the single place that decides what a query runs against: no
+   `shop` (or a `shop` not found in `shops.db`) falls back to the shared
+   demo catalog — this is what keeps `test.html`/`test_search.py`
+   working unchanged — a registered shop whose `sync_status` isn't
+   `"ready"` yet returns `status: "syncing"` with empty results (the
+   widget shows "Disc is still learning this store's catalog," not a
+   silent "no matches"), and a ready shop gets its own table, so one
+   merchant's products can never leak into another's results.
+5. Mandatory GDPR webhooks (`customers/data_request`,
+   `customers/redact`, `shop/redact`) are required by Shopify for every
+   app regardless of what it stores. Disc holds no customer PII at all —
+   only product catalog data — so the first two are acknowledgements,
+   not real data operations; `shop/redact` is the one that actually
+   deletes something (the shop's table + registry row).
+
+**What can and can't be tested without a real Partner app**:
+`backend/test_multi_tenant.py` covers everything that doesn't require
+real Shopify credentials or a public deployment — HMAC verification
+(accepts a correctly-signed request, rejects a tampered one, in both the
+OAuth-callback and webhook signature schemes, which are different),
+Admin API product JSON parsing against a fixture, and full per-shop
+isolation (two fake shops ingested via a monkeypatched `fetch_all_products`,
+then queried through the live `/search` endpoint to confirm neither sees
+the other's catalog). It deliberately does *not* and *cannot* verify that
+the real OAuth round trip or webhook delivery works against Shopify's
+actual servers — see "Going live" below for what that requires.
 
 ### Frontend — the widget contract
 
@@ -127,6 +196,16 @@ exactly one visible, usable search entry point on the page — Disc's own.
    least a narrow phone (~320–375px), a short landscape phone (~375px
    tall), and a wide desktop viewport — it's cheap to check with
    Playwright and easy to silently break one of them while fixing another.
+10. `detectShop()` reads `window.Shopify.shop` (a global every Shopify
+    storefront injects) and sends it with every `/search` call — this is
+    what makes multi-tenancy zero-config for the merchant; there's
+    nothing to paste into the script tag. Falls back to `null` on pages
+    without it (this repo's own `test.html`), which the backend treats
+    as "use the shared demo catalog." A `status: "syncing"` response
+    (a real shop whose catalog hasn't finished indexing yet) renders as
+    `showSyncing()`, distinct from `showEmpty()` — a shopper on a
+    freshly-installed store shouldn't read "still indexing" as "this
+    store has nothing you want."
 
 There is no photo-attachment/visual-search capability, deliberately. A
 reference implementation this was ported from had one (attach a photo,
@@ -159,6 +238,47 @@ Two things worth remembering if you touch the CSS again:
   backdrop happens to blur through it, so text carries its own shadow as
   a legibility safety net rather than relying on the glass tint alone.
 
+## Going live: manual setup this repo cannot do for you
+
+Every line of the OAuth/webhook/ingestion code is written and tested (as
+far as it can be without real credentials — see `test_multi_tenant.py`
+above). What's left is entirely outside what a coding session can do,
+because it requires *your* Shopify account and a real public deployment:
+
+1. **Create a Shopify Partner account** (partners.shopify.com, free) and
+   **register an app** in the Partner Dashboard. This produces the
+   `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` that `shopify_auth.py`
+   reads from the environment — nothing in this codebase can generate
+   or guess these; they only exist once you create the app.
+2. **Deploy this backend somewhere with a real, public HTTPS URL.**
+   `localhost:8000` cannot receive Shopify's OAuth redirect or its
+   webhooks — both are requests *from* Shopify's servers *to* this
+   backend, so they need a real reachable address. Set that URL as the
+   `APP_URL` environment variable (it's used to build the OAuth
+   `redirect_uri` and every webhook `address`).
+3. **Set the environment variables** the deployed process needs:
+   `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_SCOPES` (defaults to
+   `read_products`, which is all this app needs), `APP_URL`.
+4. **In the Partner Dashboard**, set the app's URL and allowed redirect
+   URL to `{APP_URL}` and `{APP_URL}/auth/callback`. Configure the three
+   mandatory GDPR webhook endpoints there too (Shopify requires these to
+   be registered in the Dashboard, not via the Admin API):
+   `{APP_URL}/webhooks/customers/data_request`,
+   `{APP_URL}/webhooks/customers/redact`,
+   `{APP_URL}/webhooks/shop/redact`.
+5. **Install it on a real (or development) store** by visiting
+   `{APP_URL}/auth?shop=your-dev-store.myshopify.com` — this is the
+   first point where any of this code actually talks to Shopify's
+   servers, so it's also the first real end-to-end test. Watch the
+   backend logs during `_run_full_ingestion`; `GET
+   /shops/{shop}/status` reports `sync_status` (`pending` ->
+   `syncing` -> `ready`, or `error`) without needing log access.
+6. If you intend to list this on the Shopify App Store rather than use
+   it privately: that adds app review, a privacy policy URL, listing
+   assets, and (if charging merchants) the Billing API — none of that
+   is built here, and it's a separate scope decision from "the app
+   works," not a coding task blocked on anything above.
+
 ## Local dev
 
 ```bash
@@ -167,6 +287,12 @@ pip install -r requirements.txt
 python ingest.py          # builds backend/data/disc_lancedb from the sample catalog
 uvicorn server:app --reload --port 8000
 ```
+
+`python test_multi_tenant.py` (from `/backend`, with the server running)
+runs everything about the OAuth/webhook/multi-tenant pipeline that's
+testable without real Shopify credentials: HMAC verification, Admin API
+product parsing, and full per-shop search isolation between two fake
+shops.
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
 points it at `http://localhost:8000`) to see the fake theme's own search

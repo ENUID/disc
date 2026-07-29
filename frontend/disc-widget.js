@@ -242,7 +242,11 @@
         .then(
           function (data) {
             if (this._input.value.trim() !== query) return; // stale response, a newer query is in flight
-            this.renderResults(data.results, query);
+            if (data.status === "syncing") {
+              this.showSyncing();
+            } else {
+              this.renderResults(data.results, query);
+            }
           }.bind(this)
         )
         .catch(
@@ -332,6 +336,18 @@
       this._results = [];
       this._setContent(
         '<div class="disc-empty">Disc search is temporarily unavailable.</div>',
+        true
+      );
+      this.open();
+    }
+
+    // A registered store whose catalog hasn't finished indexing yet —
+    // distinct from "no results", so a shopper on a freshly-installed
+    // store doesn't read this as "this store has nothing".
+    showSyncing() {
+      this._results = [];
+      this._setContent(
+        '<div class="disc-empty">Disc is still learning this store’s catalog. Check back in a few minutes.</div>',
         true
       );
       this.open();
@@ -862,13 +878,26 @@
   }
 
   // ---------------------------------------------------------------------
+  // Which store this is: Shopify injects a global `Shopify.shop` (the
+  // *.myshopify.com domain) on every storefront page, so a real
+  // installed shop needs zero configuration beyond the script tag itself
+  // — no ID to paste in, nothing to get wrong. Falls back to null (the
+  // backend's shared demo catalog) on pages without it, e.g. this
+  // project's own test.html.
+  // ---------------------------------------------------------------------
+  function detectShop() {
+    if (window.Shopify && window.Shopify.shop) return window.Shopify.shop;
+    return null;
+  }
+
+  // ---------------------------------------------------------------------
   // Networking.
   // ---------------------------------------------------------------------
   function fetchResults(query) {
     return fetch(CONFIG.apiUrl + "/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query: query, limit: CONFIG.resultLimit }),
+      body: JSON.stringify({ query: query, limit: CONFIG.resultLimit, shop: detectShop() }),
     }).then(function (res) {
       if (!res.ok) throw new Error("Disc search request failed: " + res.status);
       return res.json();
