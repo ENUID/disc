@@ -36,9 +36,46 @@ def _strip_html(html: str | None) -> str:
     return _WHITESPACE_RUN_RE.sub(" ", no_tags).strip()
 
 
+def _tag_list(raw) -> list[str]:
+    """Tags arrive in two different shapes and both are load-bearing.
+
+    The Admin API sends a comma-separated string; the storefront's public
+    products.json sends a real list. Disc ingests from both, and tags go
+    straight into the embedding text, so getting this wrong doesn't throw
+    — it quietly degrades every search result for that shop.
+    """
+    if isinstance(raw, str):
+        return [t.strip() for t in raw.split(",") if t.strip()]
+    return [str(t).strip() for t in (raw or []) if str(t).strip()]
+
+
+def _variant_available(v: dict) -> bool:
+    """Whether a size can actually be bought.
+
+    The public storefront JSON states this outright as `available`. The
+    Admin API doesn't — it exposes inventory numbers instead, and omits
+    them entirely when the merchant isn't tracking stock, where absent
+    has to mean "buyable" rather than "sold out". Trust the explicit flag
+    whenever it's there; a sold-out size shown as in stock is a shopper
+    hitting an error at checkout.
+    """
+    if "available" in v:
+        return bool(v["available"])
+    return (
+        v.get("inventory_quantity", 1) is None
+        or int(v.get("inventory_quantity", 1) or 0) > 0
+        or v.get("inventory_management") is None
+    )
+
+
 def product_to_record(product: dict) -> dict | None:
-    """Admin API product JSON -> our flat record shape. Returns None for
+    """Shopify product JSON -> our flat record shape. Returns None for
     products with no purchasable variant (nothing to show a price for).
+
+    Handles both sources Disc ingests from: the Admin API (OAuth app
+    install) and the storefront's public products.json (self-serve
+    install). The two payloads are near-identical apart from tags and
+    availability, which `_tag_list` and `_variant_available` reconcile.
 
     Variants, images, handle and product_type are carried through even
     though search itself doesn't use them: the detail overlay needs the
@@ -50,18 +87,14 @@ def product_to_record(product: dict) -> dict | None:
     if not raw_variants:
         return None
     images = [img["src"] for img in (product.get("images") or []) if img.get("src")]
-    tags = [t.strip() for t in (product.get("tags") or "").split(",") if t.strip()]
+    tags = _tag_list(product.get("tags"))
 
     variants = [
         {
             "id": str(v.get("id", "")),
             "title": v.get("title", "") or "",
             "price": float(v.get("price", 0) or 0),
-            # The Admin API omits inventory fields when tracking is off;
-            # absent should mean "buyable", not "sold out".
-            "available": v.get("inventory_quantity", 1) is None
-            or int(v.get("inventory_quantity", 1) or 0) > 0
-            or v.get("inventory_management") is None,
+            "available": _variant_available(v),
         }
         for v in raw_variants
     ]
@@ -109,12 +142,14 @@ def _next_page_url(link_header: str) -> str | None:
     return None
 
 
-def ingest_shop(shop: str, access_token: str, embedder: TextEmbedding) -> int:
-    """Full re-ingestion: fetch every product, embed, overwrite the shop's
-    table. Returns the number of products indexed."""
-    raw_products = fetch_all_products(shop, access_token)
-    records = [r for r in (product_to_record(p) for p in raw_products) if r is not None]
+def write_records(shop: str, records: list[dict], embedder: TextEmbedding) -> int:
+    """Embed these records and overwrite the shop's table with them.
 
+    Split out from `ingest_shop` so the Admin API path and the public
+    storefront path share one writer: per-shop table naming — the thing
+    that keeps one merchant's products out of another's results — must
+    have exactly one implementation, not one per ingestion source.
+    """
     LANCE_DB_PATH.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(LANCE_DB_PATH))
     table_name = table_name_for_shop(shop)
@@ -129,6 +164,14 @@ def ingest_shop(shop: str, access_token: str, embedder: TextEmbedding) -> int:
 
     db.create_table(table_name, data=records, mode="overwrite")
     return len(records)
+
+
+def ingest_shop(shop: str, access_token: str, embedder: TextEmbedding) -> int:
+    """Full re-ingestion over the Admin API: fetch every product, embed,
+    overwrite the shop's table. Returns the number of products indexed."""
+    raw_products = fetch_all_products(shop, access_token)
+    records = [r for r in (product_to_record(p) for p in raw_products) if r is not None]
+    return write_records(shop, records, embedder)
 
 
 def upsert_product(shop: str, product: dict, embedder: TextEmbedding) -> None:

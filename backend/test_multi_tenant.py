@@ -26,15 +26,32 @@ import hashlib
 import hmac
 import json
 import sys
+import time
 from datetime import datetime, timezone
 
 import requests
 
+import billing
 import db
 import multi_tenant_ingest
+import public_ingest
 import shopify_auth
 
 API_URL = "http://localhost:8000"
+
+_EMBEDDER = None
+
+
+def _embedder():
+    """One shared fastembed instance — loading the model twice in a test
+    run costs more than the rest of the suite put together."""
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        from fastembed import TextEmbedding
+
+        _EMBEDDER = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+    return _EMBEDDER
+
 
 FAILURES = []
 
@@ -151,9 +168,7 @@ def test_multi_tenant_isolation() -> None:
 
     original_fetch = multi_tenant_ingest.fetch_all_products
     try:
-        from fastembed import TextEmbedding
-
-        embedder = TextEmbedding(model_name="BAAI/bge-small-en-v1.5")
+        embedder = _embedder()
 
         multi_tenant_ingest.fetch_all_products = lambda shop, token: (
             products_a if shop == shop_a else products_b
@@ -243,11 +258,219 @@ def test_storefront_endpoints() -> None:
     check(missing.status_code == 404, "/product 404s on an unknown id rather than 500ing")
 
 
+def test_public_catalog_parsing() -> None:
+    """The storefront's public products.json differs from the Admin API in
+    exactly two ways, and both silently corrupt a shop's index rather than
+    raising, so both are pinned here."""
+    public_product = {
+        "id": 987654321,
+        "title": "Merino Runner",
+        "body_html": "<p>Light <b>wool</b> sneakers.</p>",
+        # A real list, where the Admin API sends "a, b, c"
+        "tags": ["wool", "shoes", "everyday"],
+        "product_type": "Shoes",
+        "handle": "merino-runner",
+        "variants": [
+            # An explicit availability flag, where the Admin API sends
+            # inventory numbers instead
+            {"id": 1, "title": "8", "price": "98.00", "available": True, "option1": "Grey"},
+            {"id": 2, "title": "9", "price": "98.00", "available": False},
+        ],
+        "images": [{"src": "https://cdn.shopify.com/a.jpg"}, {"src": "https://cdn.shopify.com/b.jpg"}],
+    }
+    record = multi_tenant_ingest.product_to_record(public_product)
+    check(
+        record["tags"] == ["wool", "shoes", "everyday"],
+        "public JSON: a tag list is kept as a list (Admin API sends a string)",
+    )
+    check(
+        [v["available"] for v in record["variants"]] == [True, False],
+        "public JSON: the explicit `available` flag is honoured, so sold-out sizes stay sold out",
+    )
+    check(
+        record["colour"] == "Grey" and len(record["images"]) == 2,
+        "public JSON: colour and the full image set survive ingestion",
+    )
+
+    # The Admin API shape must keep working — both sources share this function.
+    admin_record = multi_tenant_ingest.product_to_record(
+        {
+            "id": 5,
+            "title": "x",
+            "tags": "a, b",
+            "variants": [{"id": 9, "price": "1.00", "inventory_management": None}],
+        }
+    )
+    check(
+        admin_record["tags"] == ["a", "b"] and admin_record["variants"][0]["available"] is True,
+        "Admin API shape still parses: comma tags split, untracked inventory means buyable",
+    )
+
+    check(
+        public_ingest.normalise_domain("https://WWW.Shop.com/collections/all?x=1") == "shop.com",
+        "normalise_domain: strips scheme, www, path and query, and lowercases",
+    )
+
+
+def test_self_serve_signup() -> None:
+    """The signup -> site key -> scoped search path, without touching
+    Shopify OAuth or Stripe.
+
+    The storefront fetch is monkeypatched, so this doesn't depend on a
+    third-party store being up — but the domain probe, key issuance, key
+    persistence and per-key search scoping are all the real code paths.
+    """
+    domain = "test-selfserve-shop.example"
+    fixture = [
+        {
+            "id": 7001,
+            "title": "Selfserve Store Cashmere Scarf",
+            "body_html": "<p>A soft scarf, only in the self-serve fixture shop.</p>",
+            "tags": ["cashmere", "scarf"],
+            "product_type": "Accessories",
+            "variants": [{"id": 1, "title": "One size", "price": "120.00", "available": True}],
+            "images": [{"src": "https://cdn.example.com/scarf.jpg"}],
+        }
+    ]
+
+    original_fetch = public_ingest.fetch_public_products
+    original_probe = public_ingest.probe_storefront
+    public_ingest.fetch_public_products = lambda d: fixture
+    public_ingest.probe_storefront = lambda d: len(fixture)
+    try:
+        site_key = "disc_" + "f" * 32
+        db.create_site(domain, site_key, "merchant@example.com")
+        count = public_ingest.ingest_public_shop(domain, _embedder())
+        db.set_sync_status(
+            domain, "ready", product_count=count, synced_at=datetime.now(timezone.utc).isoformat()
+        )
+        check(count == 1, "ingest_public_shop: indexes the public catalog into the shop's own table")
+
+        # Re-signing up must not rotate the key — it's already pasted into
+        # a live theme, and a new one would silently kill Disc there.
+        db.create_site(domain, "disc_" + "e" * 32, None)
+        check(
+            db.get_shop(domain)["site_key"] == site_key,
+            "create_site: signing up again keeps the existing site key",
+        )
+        check(
+            db.get_shop_by_site_key(site_key)["shop"] == domain,
+            "get_shop_by_site_key: a site key resolves back to its shop",
+        )
+
+        scoped = requests.post(
+            f"{API_URL}/search",
+            json={"query": "soft scarf", "limit": 5, "site_key": site_key},
+            timeout=60,
+        ).json()
+        titles = [r["title"] for r in scoped["results"]]
+        check(
+            titles == ["Selfserve Store Cashmere Scarf"],
+            "/search scoped by site_key returns only that shop's catalog",
+        )
+
+        status = requests.get(f"{API_URL}/sites/{site_key}/status", timeout=30).json()
+        check(
+            status["domain"] == domain and status["sync_status"] == "ready",
+            "/sites/{key}/status reports the shop's indexing state",
+        )
+        check(
+            status["active"] is True,
+            "/sites/{key}/status reports active when billing isn't configured, "
+            "so a keyless dev deployment isn't locked out",
+        )
+
+        embed = requests.get(f"{API_URL}/embed.js", params={"k": site_key}, timeout=30)
+        check(
+            embed.status_code == 200 and site_key in embed.text and "disc-search-bar" in embed.text,
+            "/embed.js serves the widget with the site key baked in",
+        )
+        unknown = requests.get(f"{API_URL}/embed.js", params={"k": "disc_nope"}, timeout=30)
+        check(
+            unknown.status_code == 200,
+            "/embed.js still serves for an unknown key — a hard failure would "
+            "throw a JS error on a live storefront",
+        )
+
+        bad = requests.get(f"{API_URL}/sites/disc_nope/status", timeout=30)
+        check(bad.status_code == 404, "/sites/{key}/status 404s on an unknown key")
+    finally:
+        public_ingest.fetch_public_products = original_fetch
+        public_ingest.probe_storefront = original_probe
+        multi_tenant_ingest.delete_shop_table(domain)
+        db.delete_shop(domain)
+
+
+def test_stripe_webhook_signature() -> None:
+    """Stripe's signature scheme, which is a third distinct one from the
+    two Shopify schemes already covered above."""
+    secret = "whsec_test_secret"
+    original = billing.STRIPE_WEBHOOK_SECRET
+    billing.STRIPE_WEBHOOK_SECRET = secret
+    try:
+        body = b'{"type":"checkout.session.completed"}'
+        timestamp = str(int(time.time()))
+        signed = f"{timestamp}.".encode() + body
+        digest = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+
+        check(
+            billing.verify_webhook_signature(body, f"t={timestamp},v1={digest}"),
+            "Stripe webhook: accepts a correctly-signed request",
+        )
+        check(
+            not billing.verify_webhook_signature(body + b" ", f"t={timestamp},v1={digest}"),
+            "Stripe webhook: rejects a tampered body",
+        )
+        check(
+            not billing.verify_webhook_signature(body, f"t={timestamp},v1={'0' * 64}"),
+            "Stripe webhook: rejects a bad signature",
+        )
+        old = str(int(time.time()) - 9999)
+        old_digest = hmac.new(
+            secret.encode(), f"{old}.".encode() + body, hashlib.sha256
+        ).hexdigest()
+        check(
+            not billing.verify_webhook_signature(body, f"t={old},v1={old_digest}"),
+            "Stripe webhook: rejects a correctly-signed but stale request (replay guard)",
+        )
+
+        rejected = requests.post(
+            f"{API_URL}/webhooks/stripe", data=body, headers={"Stripe-Signature": "t=1,v1=bad"},
+            timeout=30,
+        )
+        check(
+            rejected.status_code == 401,
+            "/webhooks/stripe rejects an unsigned request before parsing it",
+        )
+    finally:
+        billing.STRIPE_WEBHOOK_SECRET = original
+
+
+def test_plan_selection() -> None:
+    check(billing.plan_for_catalog(80) == "starter", "plan_for_catalog: a small catalog gets Starter")
+    check(
+        billing.plan_for_catalog(3000) == "growth",
+        "plan_for_catalog: a mid catalog gets the next tier up",
+    )
+    check(
+        billing.plan_for_catalog(50000) == "boutique",
+        "plan_for_catalog: an unlimited-tier catalog gets Boutique",
+    )
+    check(
+        not billing.enabled(),
+        "billing.enabled() is False without a Stripe key, so dev and tests aren't gated",
+    )
+
+
 def main() -> int:
     test_oauth_callback_hmac()
     test_webhook_hmac()
     test_product_json_parsing()
+    test_public_catalog_parsing()
     test_multi_tenant_isolation()
+    test_self_serve_signup()
+    test_stripe_webhook_signature()
+    test_plan_selection()
     test_webhook_rejects_bad_signature()
     test_storefront_endpoints()
 

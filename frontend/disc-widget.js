@@ -37,11 +37,37 @@
   var CURRENT_SCRIPT = document.currentScript;
   var USER_CONFIG = window.DiscConfig || {};
 
+  // Last-resort read of the key straight off the script's own src
+  // (…/embed.js?k=disc_xxx). /embed.js normally injects it as config
+  // before this file runs, so this only matters if a merchant pastes the
+  // URL somewhere that strips the prelude — a broken bar is a worse
+  // failure than one extra parse.
+  function _keyFromScriptUrl() {
+    try {
+      var src = (CURRENT_SCRIPT && CURRENT_SCRIPT.src) || "";
+      var match = src.match(/[?&]k=([^&]+)/);
+      return match ? decodeURIComponent(match[1]) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   var CONFIG = {
     apiUrl:
       (CURRENT_SCRIPT && CURRENT_SCRIPT.dataset.apiUrl) ||
       USER_CONFIG.apiUrl ||
       "http://localhost:8000",
+    // Which tenant this install belongs to. Disc is sold direct rather
+    // than through the App Store, so there is no OAuth handshake to
+    // identify the store — the merchant pastes a script tag carrying
+    // this key instead. /embed.js bakes it in, so the merchant never
+    // types it; the dataset and DiscConfig routes exist for anyone
+    // self-hosting the file.
+    siteKey:
+      (CURRENT_SCRIPT && CURRENT_SCRIPT.dataset.siteKey) ||
+      USER_CONFIG.siteKey ||
+      _keyFromScriptUrl() ||
+      null,
     searchSelectors: 'input[name="q"], input[type="search"]',
     scanIntervalMs: 500,
     debounceMs: 300,
@@ -496,7 +522,12 @@
         .then(
           function (data) {
             if (this._input.value.trim() !== query) return; // superseded
-            if (data.status === "syncing") {
+            if (data.status === "inactive") {
+              // The subscription lapsed while this page was open. Get
+              // out of the shopper's way and give the store its own
+              // search box back.
+              goDormant();
+            } else if (data.status === "syncing") {
               this.showMessage(
                 "Still learning this store’s catalog",
                 "Disc is indexing the collection. Check back in a few minutes."
@@ -1012,8 +1043,11 @@
   }
 
   function shopParam() {
+    var parts = [];
+    if (CONFIG.siteKey) parts.push("site_key=" + encodeURIComponent(CONFIG.siteKey));
     var shop = detectShop();
-    return shop ? "?shop=" + encodeURIComponent(shop) : "";
+    if (shop) parts.push("shop=" + encodeURIComponent(shop));
+    return parts.length ? "?" + parts.join("&") : "";
   }
 
   function fetchResults(query) {
@@ -1023,6 +1057,7 @@
       body: JSON.stringify({
         query: query,
         limit: CONFIG.resultLimit,
+        site_key: CONFIG.siteKey,
         shop: detectShop(),
       }),
     }).then(function (res) {
@@ -1660,17 +1695,69 @@
   // installed. visibility:hidden (not display:none) preserves its layout
   // space so nothing in the theme reflows around a collapsed box.
   // ---------------------------------------------------------------------
-  function init() {
-    if (document.querySelector("disc-search-bar")) return;
-    document.body.appendChild(document.createElement("disc-search-bar"));
+  // Every native input Disc has hidden, so going dormant can put them
+  // all back exactly as they were.
+  var _hiddenInputs = [];
+  var _scanInterval = null;
 
-    var interval = setInterval(function () {
+  function hideNativeSearch() {
+    _scanInterval = setInterval(function () {
       var input = document.querySelector(CONFIG.searchSelectors);
       if (input) {
-        clearInterval(interval);
+        clearInterval(_scanInterval);
+        _scanInterval = null;
+        _hiddenInputs.push([input, input.style.visibility]);
         input.style.visibility = "hidden";
       }
     }, CONFIG.scanIntervalMs);
+  }
+
+  // Disc switching itself off must leave the storefront no worse than it
+  // found it. Hiding a merchant's search box on behalf of a bar that no
+  // longer answers would take away the only way to search the shop, so
+  // the bar goes and every hidden input comes back.
+  function goDormant() {
+    if (_scanInterval) {
+      clearInterval(_scanInterval);
+      _scanInterval = null;
+    }
+    _hiddenInputs.forEach(function (pair) {
+      pair[0].style.visibility = pair[1] || "";
+    });
+    _hiddenInputs = [];
+    var bar = document.querySelector("disc-search-bar");
+    if (bar && bar.parentNode) bar.parentNode.removeChild(bar);
+  }
+
+  function init() {
+    if (document.querySelector("disc-search-bar")) return;
+
+    // Without a site key there is no tenant to check — that's the demo
+    // catalog (this repo's test.html), which is always live.
+    if (!CONFIG.siteKey) {
+      document.body.appendChild(document.createElement("disc-search-bar"));
+      hideNativeSearch();
+      return;
+    }
+
+    // Ask once, on boot, whether this store's Disc is live. Doing it
+    // before hiding anything is what stops a lapsed or misconfigured
+    // install from leaving a storefront with no search box at all —
+    // worth one small request per page load. A network failure resolves
+    // as "carry on": the store having Disc briefly misbehave beats it
+    // losing its bar because our status endpoint blipped.
+    fetch(CONFIG.apiUrl + "/sites/" + encodeURIComponent(CONFIG.siteKey) + "/status")
+      .then(function (res) {
+        return res.ok ? res.json() : null;
+      })
+      .catch(function () {
+        return null;
+      })
+      .then(function (status) {
+        if (status && status.active === false) return;
+        document.body.appendChild(document.createElement("disc-search-bar"));
+        hideNativeSearch();
+      });
   }
 
   if (document.readyState === "loading") {

@@ -91,6 +91,9 @@ def register_webhooks(shop: str, access_token: str) -> None:
         ("products/update", "/webhooks/products/update"),
         ("products/delete", "/webhooks/products/delete"),
         ("app/uninstalled", "/webhooks/app/uninstalled"),
+        # Billing state changes — a cancellation or a failed payment has
+        # to reach us without waiting for the merchant to reopen the app.
+        ("app_subscriptions/update", "/webhooks/app_subscriptions/update"),
     ]
     headers = {
         "X-Shopify-Access-Token": access_token,

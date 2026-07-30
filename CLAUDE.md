@@ -8,6 +8,16 @@ docked above their store that, once used, opens a full-screen shopping
 experience — editorial results, product detail with sizes and real
 add-to-cart, complete-the-look outfitting, and a saved-items list.
 
+**Disc is sold direct, not through the Shopify App Store.** That was a
+deliberate call: building and getting an app approved takes weeks, and
+the self-serve path ships now. A merchant signs up on our own site, we
+read their catalog, they paste one line into their theme. Everything
+about how Disc reaches a storefront, identifies a tenant, and gets paid
+follows from that decision — see "Distribution" below. The Shopify OAuth
+app code is still here, unused but working, because it's the upgrade
+path once a listing exists; don't delete it, and don't wire the product
+to it without checking first.
+
 The shape of the experience is modelled on Brunello Cucinelli's "AI
 Online Boutique" (the reference the user supplied as a screen recording):
 
@@ -77,16 +87,26 @@ and is wrong everywhere it appears now.
   ingest.py               -> builds the DEMO LanceDB table (backend/data/disc_lancedb) from
                               the 15-item sample catalog — used when no shop is registered,
                               e.g. this repo's own test.html
-  server.py               -> FastAPI app: POST /search, OAuth install flow, webhooks
-  db.py                   -> SQLite shop registry (shop -> access token, sync status)
-  shopify_auth.py         -> OAuth authorize-URL building, token exchange, HMAC verification
-  multi_tenant_ingest.py  -> per-shop catalog ingestion via the Admin API
-  test_multi_tenant.py    -> HMAC + parsing + per-shop isolation tests (no real credentials needed)
+  server.py               -> FastAPI app: /search, signup, /embed.js, billing, webhooks
+  db.py                   -> SQLite tenant registry (domain -> site key, sync + subscription state)
+  public_ingest.py        -> SHIPPING PATH: catalog ingestion via the storefront's public
+                              products.json — no OAuth, no credentials
+  billing.py              -> Stripe plans, Checkout sessions, webhook signature verification
+  multi_tenant_ingest.py  -> record shape + per-shop table writer, shared by both ingestion
+                              sources; also the (dormant) Admin API fetch
+  shopify_auth.py         -> DORMANT: OAuth + Shopify webhook HMAC, for a future App Store listing
+  test_multi_tenant.py    -> signature schemes, both parsing shapes, self-serve signup,
+                              per-shop isolation (no real credentials needed)
   requirements.txt
   data/                   -> gitignored: disc_lancedb (demo), disc_lancedb_multi (per real shop,
                               one LanceDB table each), shops.db (SQLite)
 /frontend
   disc-widget.js  -> the entire client: Web Component + Shadow DOM + native-input takeover
+  tests/          -> Playwright suites. These live in the repo rather than a scratch dir
+                     because they are the only check on layout regressions:
+                       devices_test.js  -> does it fit, across 14 real device profiles
+                       coverage_test.js -> can the shopper actually see and hit it
+                       dormant_test.js  -> an inactive tenant must not cost a store its search
 test.html         -> a fake Shopify PDP/search page for local end-to-end testing
 test_search.py    -> scripted test hitting POST /search with a real intent query (demo catalog)
 ```
@@ -137,12 +157,96 @@ them. `_hit_to_result` reads every one of these defensively, so a shop
 table written before these fields existed degrades to a plain result
 rather than 500ing the search.
 
-### Multi-tenant Shopify app — how one install becomes that store's AI
+### Distribution — how one paste becomes that store's AI
 
-This is what makes Disc *that particular store's* AI rather than a demo:
-a real Shopify OAuth app, one isolated LanceDB table per installed shop,
-built from that shop's actual Admin API catalog and kept in sync by
-product webhooks.
+This is what makes Disc *that particular store's* AI rather than a demo,
+and it happens without an app install:
+
+1. **Signup**: merchant enters their domain at `GET /`. `POST /sites`
+   normalises it and probes `https://{domain}/products.json` *before
+   writing anything* — a store that doesn't serve a readable catalog
+   can't be made to work later, and failing on the signup form beats
+   failing after they've pasted the snippet and are watching an empty
+   bar. On success it issues a **site key** (`disc_<32 hex>`) and queues
+   the first ingestion in the background.
+2. **Ingestion**: `public_ingest.ingest_public_shop()` pages the public
+   catalog (`?page=N` — *not* the Admin API's Link-header cursor), maps
+   it through the shared `product_to_record`, and overwrites a table
+   named `shop_<sanitized-domain>` in `backend/data/disc_lancedb_multi`.
+   One table per merchant is what keeps one store's products out of
+   another's results.
+3. **Install**: the merchant pastes exactly one line into
+   `layout/theme.liquid`:
+   `<script src="https://you/embed.js?k=disc_..." defer></script>`.
+   `/embed.js` serves the widget with `apiUrl` and `siteKey` baked in at
+   request time, so the snippet carries nothing they can get wrong and a
+   widget fix reaches every store without anyone editing a theme.
+4. **Staying in sync**: there are **no product webhooks** — those need an
+   app — so `_resync_loop()` re-reads every self-serve catalog every
+   `DISC_RESYNC_HOURS` (default 6). That interval *is* how stale a
+   merchant's index can get after they edit a product; `POST
+   /sites/{key}/resync` forces it immediately.
+5. **`POST /search`** takes `site_key` (and still accepts `shop`).
+   `_resolve_table()` is the single place that decides what a query runs
+   against: no tenant identified falls back to the shared demo catalog —
+   this is what keeps `test.html`/`test_search.py` working unchanged — a
+   shop whose `sync_status` isn't `"ready"` returns `status: "syncing"`
+   with empty results (the widget says "still learning this store's
+   catalog", not a silent "no matches"), an unsubscribed shop returns
+   `status: "inactive"`, and a ready shop gets its own table.
+
+**The site key is an identifier, not a secret.** It ships in a script tag
+on a public storefront, so anyone can read it. It's random so nobody can
+guess *other* merchants' keys, and prefixed so it's recognisable in a log.
+Re-running signup for a domain deliberately **keeps the existing key** —
+minting a new one would silently kill Disc on a theme that already has
+the old one pasted in.
+
+**`PUBLIC_URL` must be set in any real deployment.** It's baked into
+every snippet `/embed.js` hands out, so leaving it at the localhost
+default gives every merchant a script tag their storefront can't load —
+and it fails on *their* site, silently. The server logs a warning at
+startup if it still looks like localhost.
+
+#### Billing (Stripe, not Shopify)
+
+Selling direct means Shopify's Billing API isn't available — that one is
+only for installed apps. So: Stripe Checkout, `billing.py`. The trade
+against an App Store listing is 100% minus Stripe's ~2.9% and no $19
+Partner fee or revenue share, against losing Shopify's billing UI, its
+distribution, and charges landing on the merchant's existing Shopify
+invoice.
+
+Pricing tiers on **catalog size**, because that's the only thing about a
+shop that costs anything real — embedding is a one-time CPU cost and each
+shop's vectors sit on disk. Queries are effectively free (fastembed is
+local, no per-search API call to anyone), so charging per search would
+tax the part that costs nothing. `PLANS` in `billing.py` holds
+placeholder numbers; set them and the matching Stripe price IDs.
+
+`billing.enabled()` is False without `STRIPE_SECRET_KEY`, which is what
+keeps local dev and the test suite from being locked out by a
+subscription check they can't satisfy.
+
+**A lapsed subscription must never leave a storefront worse than Disc
+found it.** Disc hides the theme's own search box on the promise that its
+bar replaces it; if the tenant goes inactive that promise is broken, and
+hiding it anyway would leave the shop with *no* way to search. So the
+widget checks `/sites/{key}/status` once on boot **before hiding
+anything**, and stays dormant if `active` is false — and `goDormant()`
+restores any input it already hid if a search later comes back
+`inactive`. `frontend/tests/dormant_test.js` asserts both directions
+against a live billing-enabled backend. The one small cost is a status
+request per page load; a network failure resolves as "carry on", because
+Disc briefly misbehaving beats a shop losing its search bar to a blip.
+
+### The Shopify OAuth app — built, tested, currently dormant
+
+Kept because it's strictly better on three counts once an App Store
+listing exists: it reads unpublished products, it gets real product
+webhooks instead of a polling interval, and it can't be switched off by a
+merchant disabling their public JSON. Nothing in the shipping path
+depends on it.
 
 1. **Install**: merchant hits `GET /auth?shop=xyz.myshopify.com` ->
    redirected to Shopify's OAuth consent screen -> Shopify redirects back
@@ -187,17 +291,28 @@ product webhooks.
    not real data operations; `shop/redact` is the one that actually
    deletes something (the shop's table + registry row).
 
-**What can and can't be tested without a real Partner app**:
-`backend/test_multi_tenant.py` covers everything that doesn't require
-real Shopify credentials or a public deployment — HMAC verification
-(accepts a correctly-signed request, rejects a tampered one, in both the
-OAuth-callback and webhook signature schemes, which are different),
-Admin API product JSON parsing against a fixture, and full per-shop
-isolation (two fake shops ingested via a monkeypatched `fetch_all_products`,
-then queried through the live `/search` endpoint to confirm neither sees
-the other's catalog). It deliberately does *not* and *cannot* verify that
-the real OAuth round trip or webhook delivery works against Shopify's
-actual servers — see "Going live" below for what that requires.
+**What can and can't be tested without real credentials**:
+`backend/test_multi_tenant.py` covers everything that doesn't require a
+Shopify Partner app, a Stripe account, or a public deployment — **three
+different signature schemes** (Shopify OAuth callback hex/sorted-params,
+Shopify webhook base64/raw-body, and Stripe's `t=…,v1=…` including its
+replay guard), product JSON parsing for *both* source shapes, the
+self-serve signup path end to end with the storefront fetch
+monkeypatched, and full per-shop isolation queried through the live
+`/search` endpoint. It deliberately does *not* verify that a real Stripe
+checkout completes or that a real OAuth round trip works.
+
+**Two ingestion sources, one record shape.** `product_to_record` parses
+both the Admin API and the public storefront JSON, which differ in
+exactly two ways — and both differences corrupt an index silently rather
+than raising, which is why each has its own named helper and its own
+test. `tags` is a comma-separated *string* from the Admin API and a real
+*list* from the storefront (`_tag_list`). Availability is
+`inventory_quantity`/`inventory_management` from the Admin API but an
+explicit `available` boolean from the storefront (`_variant_available`) —
+reading it wrong marks every sold-out size as buyable, which a shopper
+only discovers at checkout. Verified against a real 291-product store
+where 2,098 of 2,509 variants are genuinely sold out.
 
 ### Frontend — the widget contract
 
@@ -404,46 +519,57 @@ Two things worth remembering if you touch the CSS again:
   backdrop happens to blur through it, so text carries its own shadow as
   a legibility safety net rather than relying on the glass tint alone.
 
-## Going live: manual setup this repo cannot do for you
+## Going live: what this repo can't do for you
 
-Every line of the OAuth/webhook/ingestion code is written and tested (as
-far as it can be without real credentials — see `test_multi_tenant.py`
-above). What's left is entirely outside what a coding session can do,
-because it requires *your* Shopify account and a real public deployment:
+The code is written and tested as far as it can be without real
+credentials (see `test_multi_tenant.py` above). What's left needs *your*
+accounts and a real deployment.
 
-1. **Create a Shopify Partner account** (partners.shopify.com, free) and
-   **register an app** in the Partner Dashboard. This produces the
-   `SHOPIFY_API_KEY` and `SHOPIFY_API_SECRET` that `shopify_auth.py`
-   reads from the environment — nothing in this codebase can generate
-   or guess these; they only exist once you create the app.
-2. **Deploy this backend somewhere with a real, public HTTPS URL.**
-   `localhost:8000` cannot receive Shopify's OAuth redirect or its
-   webhooks — both are requests *from* Shopify's servers *to* this
-   backend, so they need a real reachable address. Set that URL as the
-   `APP_URL` environment variable (it's used to build the OAuth
-   `redirect_uri` and every webhook `address`).
-3. **Set the environment variables** the deployed process needs:
-   `SHOPIFY_API_KEY`, `SHOPIFY_API_SECRET`, `SHOPIFY_SCOPES` (defaults to
-   `read_products`, which is all this app needs), `APP_URL`.
-4. **In the Partner Dashboard**, set the app's URL and allowed redirect
-   URL to `{APP_URL}` and `{APP_URL}/auth/callback`. Configure the three
-   mandatory GDPR webhook endpoints there too (Shopify requires these to
-   be registered in the Dashboard, not via the Admin API):
-   `{APP_URL}/webhooks/customers/data_request`,
-   `{APP_URL}/webhooks/customers/redact`,
-   `{APP_URL}/webhooks/shop/redact`.
-5. **Install it on a real (or development) store** by visiting
-   `{APP_URL}/auth?shop=your-dev-store.myshopify.com` — this is the
-   first point where any of this code actually talks to Shopify's
-   servers, so it's also the first real end-to-end test. Watch the
-   backend logs during `_run_full_ingestion`; `GET
-   /shops/{shop}/status` reports `sync_status` (`pending` ->
-   `syncing` -> `ready`, or `error`) without needing log access.
-6. If you intend to list this on the Shopify App Store rather than use
-   it privately: that adds app review, a privacy policy URL, listing
-   assets, and (if charging merchants) the Billing API — none of that
-   is built here, and it's a separate scope decision from "the app
-   works," not a coding task blocked on anything above.
+**To take money and onboard merchants — the shipping path:**
+
+1. **Deploy this backend behind a real, public HTTPS URL.** Merchants'
+   storefronts load `/embed.js` from it and every shopper's search hits
+   it, so it has to be reachable and reasonably quick. Set `PUBLIC_URL`
+   to that address — it's baked into every install snippet, and the
+   startup log warns if it still looks like localhost.
+2. **Create a Stripe account**, add a recurring Price for each tier, and
+   set `STRIPE_SECRET_KEY` plus `STRIPE_PRICE_STARTER` /
+   `STRIPE_PRICE_GROWTH` / `STRIPE_PRICE_BOUTIQUE`. Edit the numbers in
+   `billing.PLANS` to match — the ones there now are placeholders.
+3. **Point a Stripe webhook** at `{PUBLIC_URL}/webhooks/stripe` for
+   `checkout.session.completed` and `customer.subscription.*`, and set
+   `STRIPE_WEBHOOK_SECRET`. Without this, cancellations and failed
+   payments never take effect, because `/search` reads the cached
+   subscription status rather than calling Stripe per query.
+4. **Decide what runs the LLM copy.** Ollama is optional and everything
+   degrades to deterministic templated sentences without it, so the
+   product works with no LLM at all — but the "why this matched" and HOW
+   TO STYLE lines are noticeably better with one. If you want it, run
+   Ollama alongside the backend; if you don't, delete nothing, the
+   fallback is already the contract.
+5. **Test the whole loop on a real store you control**: sign up at `/`,
+   watch `GET /sites/{key}/status` go `pending` -> `syncing` -> `ready`,
+   paste the snippet into `layout/theme.liquid`, and search.
+
+Scaling notes for when it works: `db.py` is SQLite and `_oauth_states` is
+an in-process dict, so this runs as **one backend process**. Multiple
+workers need both moved to shared storage first. Each shop's LanceDB
+table is on local disk, so that disk is state — back it up or be able to
+re-ingest.
+
+**Only if you later want an App Store listing** (not needed for any of
+the above): a Shopify Partner account ($19 one-time to register for the
+App Store), an app registered in the Partner Dashboard for
+`SHOPIFY_API_KEY`/`SHOPIFY_API_SECRET`, `APP_URL` set, the three
+mandatory GDPR webhook endpoints configured there, and a **theme app
+extension** — Shopify's docs are explicit that an app integrating with a
+theme must use one rather than a script tag, so the merchant-pastes-a-tag
+install in this repo is not itself listable. Listing also brings app
+review, a privacy policy URL, listing assets, and switching billing from
+Stripe to Shopify's Billing API (which then takes 0% of your first $1M
+and 15% above it). That's a separate project, not a blocker on anything
+above.
+
 
 ## Local dev
 
@@ -455,10 +581,31 @@ uvicorn server:app --reload --port 8000
 ```
 
 `python test_multi_tenant.py` (from `/backend`, with the server running)
-runs everything about the OAuth/webhook/multi-tenant pipeline that's
-testable without real Shopify credentials: HMAC verification, Admin API
-product parsing, and full per-shop search isolation between two fake
-shops.
+runs everything testable without real credentials: three signature
+schemes, both product-JSON shapes, the self-serve signup path, and full
+per-shop search isolation between two fake shops.
+
+The layout suites need the backend up too, and run from the repo root:
+
+```bash
+node frontend/tests/devices_test.js    # does it fit, 14 device profiles
+node frontend/tests/coverage_test.js   # can the shopper see and hit it
+
+# dormant_test needs a second backend with billing switched on:
+STRIPE_SECRET_KEY=sk_test_fake PUBLIC_URL=http://localhost:8001 \
+  uvicorn server:app --port 8001
+DISC_API=http://localhost:8001 DISC_KEY=disc_... \
+  node frontend/tests/dormant_test.js
+```
+
+To exercise the real signup path locally, `POST /sites` with any real
+Shopify store's domain — it reads the public catalog, so no credentials
+are involved:
+
+```bash
+curl -X POST localhost:8000/sites -H 'Content-Type: application/json' \
+  -d '{"domain":"somestore.com"}'
+```
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
 points it at `http://localhost:8000`) to walk the whole boutique flow:
