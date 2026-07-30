@@ -21,7 +21,7 @@ from pathlib import Path
 
 import lancedb
 import requests
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from fastembed import TextEmbedding
@@ -30,7 +30,7 @@ from pydantic import BaseModel
 import db
 import multi_tenant_ingest
 import shopify_auth
-from models import SearchResult
+from models import SearchResult, Variant
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("disc.server")
@@ -180,20 +180,176 @@ def search(request: SearchRequest) -> SearchResponse:
         # score that's friendlier for the widget to render (e.g. as a bar).
         score = 1.0 / (1.0 + hit["_distance"])
         reasoning = generate_ai_reasoning(request.query, hit)
-        results.append(
-            SearchResult(
-                id=hit["id"],
-                title=hit["title"],
-                description=hit["description"],
-                price=hit["price"],
-                image_url=hit["image_url"],
-                tags=hit["tags"],
-                score=round(score, 4),
-                reasoning=reasoning,
-            )
-        )
+        results.append(_hit_to_result(hit, score=round(score, 4), reasoning=reasoning))
 
     return SearchResponse(query=request.query, results=results, status="ready")
+
+
+def _hit_to_result(hit: dict, score: float = 1.0, reasoning: str = "") -> SearchResult:
+    """One place that maps a stored row onto the wire format.
+
+    Tables written before the storefront fields existed won't have them,
+    so every added field is read defensively — an older shop table should
+    degrade to a plain result, not 500 the whole search.
+    """
+    return SearchResult(
+        id=hit["id"],
+        title=hit["title"],
+        description=hit["description"],
+        price=hit["price"],
+        image_url=hit["image_url"],
+        tags=list(hit.get("tags") or []),
+        score=score,
+        reasoning=reasoning,
+        handle=hit.get("handle") or "",
+        product_type=hit.get("product_type") or "",
+        images=list(hit.get("images") or []) or [hit["image_url"]],
+        variants=[Variant(**v) for v in (hit.get("variants") or [])],
+        colour=hit.get("colour") or "",
+    )
+
+
+def _fetch_by_id(table, product_id: str) -> dict | None:
+    rows = table.search().where(f"id = '{product_id}'").limit(1).to_list()
+    return rows[0] if rows else None
+
+
+@app.get("/product/{product_id}", response_model=SearchResult)
+def product_detail(product_id: str, shop: str | None = Query(None)) -> SearchResult:
+    """Everything the detail overlay needs: image set, variants, colour.
+
+    HOW TO STYLE copy is generated here rather than at ingest time — it's
+    one short Ollama call, and generating it for every product in a
+    catalog upfront would be wasted work for products nobody opens.
+    """
+    table, status = _resolve_table(shop)
+    if table is None:
+        raise HTTPException(409, "Shop catalog is still syncing")
+
+    row = _fetch_by_id(table, product_id)
+    if row is None:
+        raise HTTPException(404, "Product not found")
+
+    return _hit_to_result(row, score=1.0, reasoning=generate_styling_note(row))
+
+
+def generate_styling_note(item: dict) -> str:
+    """The 'HOW TO STYLE' copy. Same Ollama-with-fallback contract as the
+    match reasoning: the widget always gets a usable sentence."""
+    prompt = (
+        "You are a fashion stylist writing for a luxury boutique. In one or two "
+        "short sentences, say how to style this piece — what to wear it with and "
+        "when. Be specific and understated. Do not use bullet points.\n\n"
+        f"Product: {item['title']}\n"
+        f"Description: {item['description']}\n"
+        f"Tags: {', '.join(item.get('tags') or [])}\n\n"
+        "Styling note:"
+    )
+    try:
+        response = requests.post(
+            OLLAMA_URL,
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "options": {"temperature": 0.6, "num_predict": 90},
+            },
+            timeout=OLLAMA_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        text = response.json().get("response", "").strip()
+        if text:
+            return " ".join(text.split("\n")).strip()
+    except (requests.RequestException, ValueError) as exc:
+        logger.warning("Ollama unavailable (%s), using fallback styling note.", exc)
+
+    tags = item.get("tags") or []
+    lead = ", ".join(tags[:2]) if tags else "considered"
+    return (
+        f"Its {lead} character makes it easy to build around — pair it with "
+        "quiet, well-cut basics and let the piece lead."
+    )
+
+
+@app.get("/look/{product_id}", response_model=SearchResponse)
+def complete_the_look(
+    product_id: str, shop: str | None = Query(None), limit: int = 4
+) -> SearchResponse:
+    """Complementary pieces, not more of the same thing.
+
+    Nearest-neighbour search on its own returns near-duplicates — search
+    with a cardigan's vector and you get four more cardigans, which is
+    useless as an outfit. So we search wide in the same embedding space
+    (which already encodes style, season and material affinity) and then
+    filter *out* the item's own product_type, keeping the closest match
+    from each remaining category. That yields trousers/shoes/a bag that
+    share the piece's character.
+    """
+    table, status = _resolve_table(shop)
+    if table is None:
+        return SearchResponse(query="", results=[], status="syncing")
+
+    row = _fetch_by_id(table, product_id)
+    if row is None:
+        raise HTTPException(404, "Product not found")
+
+    own_type = (row.get("product_type") or "").lower()
+    candidates = table.search(row["vector"]).limit(40).to_list()
+
+    seen_types: set[str] = set()
+    results: list[SearchResult] = []
+    for hit in candidates:
+        if hit["id"] == product_id:
+            continue
+        hit_type = (hit.get("product_type") or "").lower()
+        if own_type and hit_type == own_type:
+            continue
+        # One piece per category, so a "look" reads as an outfit rather
+        # than three variations on the same garment.
+        if hit_type and hit_type in seen_types:
+            continue
+        seen_types.add(hit_type)
+        score = 1.0 / (1.0 + hit["_distance"])
+        results.append(_hit_to_result(hit, score=round(score, 4)))
+        if len(results) >= limit:
+            break
+
+    return SearchResponse(query=row["title"], results=results, status="ready")
+
+
+@app.get("/placeholder/{name}")
+def placeholder_image(name: str) -> Response:
+    """Generated stand-in imagery for the demo catalog.
+
+    The sample catalog has no real photography, and a grid of broken
+    images makes the whole experience look broken. This renders a calm,
+    deterministic SVG per product instead. Real shops never hit this —
+    their records carry real CDN URLs.
+    """
+    seed = sum(ord(c) for c in name)
+    hue = seed % 40 + 20  # warm stone/sand range, never a jarring colour
+    light = f"hsl({hue}, 14%, {88 - seed % 6}%)"
+    dark = f"hsl({hue}, 12%, {74 - seed % 8}%)"
+    label = name.rsplit("-", 1)[0].replace("-", " ").title()
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0%" stop-color="{light}"/>
+      <stop offset="100%" stop-color="{dark}"/>
+    </linearGradient>
+  </defs>
+  <rect width="600" height="800" fill="url(#g)"/>
+  <ellipse cx="300" cy="330" rx="120" ry="150" fill="rgba(255,255,255,0.22)"/>
+  <rect x="228" y="430" width="144" height="250" rx="16" fill="rgba(255,255,255,0.16)"/>
+  <text x="300" y="742" text-anchor="middle" font-family="Georgia, serif"
+        font-size="26" fill="rgba(0,0,0,0.42)">{label}</text>
+</svg>"""
+    return Response(
+        content=svg,
+        media_type="image/svg+xml",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
 
 
 @app.get("/health")

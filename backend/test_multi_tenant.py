@@ -211,12 +211,45 @@ def test_webhook_rejects_bad_signature() -> None:
     check(resp.status_code == 401, "Webhook endpoint rejects a request with an invalid HMAC signature (401)")
 
 
+def test_storefront_endpoints() -> None:
+    """The surfaces the boutique UI depends on: a detail payload rich
+    enough to render a product page, and a 'look' that's an outfit rather
+    than four more of the same garment."""
+    detail = requests.get(f"{API_URL}/product/p001", timeout=30).json()
+    check(detail["id"] == "p001", "/product returns the requested product")
+    check(len(detail["images"]) > 1, "/product returns a full image set, not just one thumbnail")
+    check(len(detail["variants"]) > 1, "/product returns purchasable variants for the size picker")
+    check(
+        any(not v["available"] for v in detail["variants"]),
+        "/product preserves per-variant availability so sold-out sizes can be shown as such",
+    )
+    check(bool(detail["handle"]), "/product returns a handle for real storefront links")
+    check(bool(detail["reasoning"]), "/product returns HOW TO STYLE copy")
+
+    look = requests.get(f"{API_URL}/look/p001", timeout=30).json()
+    types = [r["product_type"] for r in look["results"]]
+    check(len(look["results"]) > 0, "/look returns complementary pieces")
+    check(
+        detail["product_type"] not in types,
+        "/look excludes the item's own category — an outfit, not near-duplicates",
+    )
+    check(len(types) == len(set(types)), "/look returns at most one piece per category")
+    check(
+        all(r["id"] != "p001" for r in look["results"]),
+        "/look never recommends the item you're already looking at",
+    )
+
+    missing = requests.get(f"{API_URL}/product/does-not-exist", timeout=30)
+    check(missing.status_code == 404, "/product 404s on an unknown id rather than 500ing")
+
+
 def main() -> int:
     test_oauth_callback_hmac()
     test_webhook_hmac()
     test_product_json_parsing()
     test_multi_tenant_isolation()
     test_webhook_rejects_bad_signature()
+    test_storefront_endpoints()
 
     print()
     if FAILURES:

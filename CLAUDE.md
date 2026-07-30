@@ -1,16 +1,39 @@
-# Disc — Intent Search Widget
+# Disc — AI Boutique Widget
 
 ## What this is
 
 Disc is a B2B product from Enuid Labs. Shopify merchants install a single
-`<script>` tag and get a conversational search bar that floats fixed
-above the whole store — like Claude's own bottom-docked composer, on
-every device, sized and spaced for whatever viewport it's opened in. The
-page scrolls underneath it, visible blurred through the glass. The
-theme's own native search input is hidden as soon as Disc attaches (its
-layout space is preserved so nothing else on the page reflows — this is
-not a DOM removal) since merchants don't need two search boxes once Disc
-is installed.
+`<script>` tag and get a conversational **AI boutique**: a glass bar
+docked above their store that, once used, opens a full-screen shopping
+experience — editorial results, product detail with sizes and real
+add-to-cart, complete-the-look outfitting, and a saved-items list.
+
+The shape of the experience is modelled on Brunello Cucinelli's "AI
+Online Boutique" (the reference the user supplied as a screen recording):
+
+```
+bar (always docked)
+  -> loading canvas   ornament + rotating serif headline + line drawing
+  -> results canvas   "Get inspired by these creations" + editorial grid
+  -> product detail   full-bleed imagery + floating glass card
+                      (MATERIALS / HOW TO STYLE, price, colour, sizes,
+                       Add to cart, complete-the-look tray)
+```
+
+**The brand layer is data, never code.** Disc is sold to many stores, so
+canvas colour, ink, serif stack, headline copy, loading messages and the
+loading illustration all come from `DISC_THEME`, overridable per merchant
+via `window.DiscConfig.theme`. Copying one brand's identity into the
+widget would make it unsellable to the next merchant — verified by a test
+that renders the whole canvas in a completely different (near-black)
+identity from config alone.
+
+The theme's own native search input is hidden as soon as Disc attaches
+(its layout space is preserved so nothing else on the page reflows — this
+is not a DOM removal) since merchants don't need two search boxes once
+Disc is installed. Disc never navigates or mutates the merchant's page:
+the canvas is an overlay in Disc's own Shadow DOM, so closing it returns
+the shopper exactly where they were.
 
 This has gone through three iterations; don't reintroduce an earlier one
 without checking with the user first:
@@ -68,7 +91,36 @@ test_search.py    -> scripted test hitting POST /search with a real intent query
   using `phi3` (or `llama3`). If Ollama is not running, is unreachable, or
   times out, `generate_ai_reasoning()` catches the failure and falls back
   to a deterministic templated sentence — the API contract to the widget
-  never changes shape based on whether Ollama is up.
+  never changes shape based on whether Ollama is up. `generate_styling_note()`
+  (the HOW TO STYLE copy) follows the same contract.
+
+### Endpoints the boutique experience runs on
+
+- `POST /search` — ranked results, each with match reasoning.
+- `GET /product/{id}` — everything the detail view needs: full image set,
+  variants (size, price, per-variant availability), colour, handle, plus
+  freshly-generated HOW TO STYLE copy. Styling copy is generated on open
+  rather than at ingest time, so a catalog isn't charged for products
+  nobody looks at.
+- `GET /look/{id}` — **complete the look**. Plain nearest-neighbour search
+  is useless here: a cardigan's nearest neighbours are four more
+  cardigans. So it searches wide in the same embedding space (which
+  already encodes style, season and material affinity), then filters *out*
+  the anchor's own `product_type` and keeps the closest match from each
+  remaining category. That yields trousers/outerwear/a knit that share the
+  piece's character — an outfit, not near-duplicates. Covered by tests.
+- `GET /placeholder/{name}` — generated SVG stand-in imagery for the demo
+  catalog only. The sample catalog has no photography, and a grid of
+  broken images makes the whole experience look broken. Real shops never
+  hit this; their records carry real CDN URLs.
+
+**Ingestion carries more than search needs.** `product_to_record` keeps
+variants, all images, `handle` and `product_type` even though the vector
+search itself uses none of them — the detail view, size picker,
+add-to-cart, storefront links and complete-the-look each depend on one of
+them. `_hit_to_result` reads every one of these defensively, so a shop
+table written before these fields existed degrades to a plain result
+rather than 500ing the search.
 
 ### Multi-tenant Shopify app — how one install becomes that store's AI
 
@@ -190,30 +242,62 @@ exactly one visible, usable search entry point on the page — Disc's own.
    offset. `focusout` is a fallback resync, since `visualViewport`'s
    resize event doesn't always fire on iPad after the keyboard closes.
 9. Sizing is meant to hold up across the full device range (phone
-   portrait/landscape, tablet, desktop) without a device-specific branch:
-   the `min()`/`env()`-based host sizing and the panel's `dvh`-capped
-   height are what do that work. Verify any future CSS change against at
-   least a narrow phone (~320–375px), a short landscape phone (~375px
-   tall), and a wide desktop viewport — it's cheap to check with
-   Playwright and easy to silently break one of them while fixing another.
+   portrait/landscape, tablet, desktop) without a device-specific branch.
+   Verify any future CSS change against at least a narrow phone
+   (~320–390px), a **short landscape phone (~390px tall)**, and a wide
+   desktop viewport — it's cheap with Playwright and easy to silently
+   break one while fixing another. The landscape case has already caught
+   two real bugs.
 10. `detectShop()` reads `window.Shopify.shop` (a global every Shopify
-    storefront injects) and sends it with every `/search` call — this is
-    what makes multi-tenancy zero-config for the merchant; there's
-    nothing to paste into the script tag. Falls back to `null` on pages
-    without it (this repo's own `test.html`), which the backend treats
-    as "use the shared demo catalog." A `status: "syncing"` response
-    (a real shop whose catalog hasn't finished indexing yet) renders as
-    `showSyncing()`, distinct from `showEmpty()` — a shopper on a
-    freshly-installed store shouldn't read "still indexing" as "this
-    store has nothing you want."
+    storefront injects) and sends it with every call — this is what makes
+    multi-tenancy zero-config for the merchant; there's nothing to paste
+    into the script tag. Falls back to `null` on pages without it (this
+    repo's own `test.html`), which the backend treats as "use the shared
+    demo catalog." A `status: "syncing"` response renders as its own
+    message — a shopper on a freshly-installed store shouldn't read
+    "still indexing" as "this store has nothing you want."
 
-There is no photo-attachment/visual-search capability, deliberately. A
-reference implementation this was ported from had one (attach a photo,
-search visually against it), but our backend has no image-embedding
-pipeline, and the user explicitly asked for that icon to be removed
-rather than have a button that looks functional but does nothing. Don't
-re-add an attach button without both a real backend capability behind it
-and the user asking for it.
+#### The takeover canvas
+
+11. Searching opens `.disc-canvas`, a full-screen view inside the Shadow
+    DOM. The host is `position: fixed; inset: 0` but
+    `pointer-events: none` while idle, so it never swallows clicks on the
+    merchant's page; only the bar (and the canvas, once open) are
+    interactive. Opening also locks `documentElement.overflow` so the
+    store doesn't scroll behind the takeover.
+12. **The detail view's glass card lives in `.disc-overlay`, outside the
+    scrolling `.disc-body`.** This is deliberate and load-bearing: sticky
+    positioning can't keep it pinned, because a sticky element stops as
+    soon as its own parent's content ends — that bug left the card
+    floating mid-page. Within the overlay only `.disc-detail-secondary`
+    (chips, panels, look tray) scrolls; `.disc-buy` is `flex-shrink: 0`,
+    so on a short viewport the chips clip rather than Add-to-cart being
+    pushed out of reach. That was a real bug found on a 390px-tall
+    landscape phone, where the purchase card was completely unreachable.
+13. `[hidden] { display: none !important; }` is required — without it the
+    attribute is a no-op on anything given an explicit `display` value,
+    which is why the Back button once appeared on the results view.
+14. Canvas chrome must be **theme-proof**: nav buttons and secondary text
+    derive from `--disc-ink` (with opacity) or neutral translucent grey,
+    never hardcoded white/black. A merchant's canvas may be near-black,
+    and a white pill on white is invisible — a bug the dark-theme test
+    caught.
+15. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
+    the merchant's domain; Disc never proxies commerce. On a page that
+    isn't a Shopify storefront there is no cart, so it resolves as
+    `"demo"` and the UI says so plainly rather than faking success.
+    A multi-size product refuses to add until a size is chosen, mirroring
+    how real storefronts behave.
+16. The wishlist is `localStorage` only — no account, no PII, nothing sent
+    to the backend. Toggling a heart updates every instance of that
+    product on screen at once (grid card, look tray, detail card).
+
+There is no photo-attachment/visual-search capability, deliberately. Both
+reference implementations had one (attach a photo, search visually), but
+our backend has no image-embedding pipeline, and the user explicitly
+asked for that icon to be removed rather than ship a button that looks
+functional but does nothing. Don't re-add it without both a real backend
+capability behind it and the user asking for it.
 
 ### Design system
 
@@ -295,8 +379,16 @@ product parsing, and full per-shop search isolation between two fake
 shops.
 
 Open `test.html` in a browser (it loads `frontend/disc-widget.js` and
-points it at `http://localhost:8000`) to see the fake theme's own search
-input get hidden and Disc's own glass bar floating at the bottom.
+points it at `http://localhost:8000`) to walk the whole boutique flow:
+the fake theme's own search input gets hidden, Disc's bar docks at the
+bottom, and searching opens the loading canvas -> results -> product
+detail with sizes, add-to-cart and complete-the-look.
+
+Because `test.html` isn't a real Shopify storefront, two things
+deliberately behave differently there and **this is correct, not a bug**:
+the backend serves the shared demo catalog (no `window.Shopify.shop` to
+scope to), and add-to-cart reports itself as a demo instead of pretending
+to succeed against a cart that doesn't exist.
 
 Known limitation worth knowing about before "fixing" it: the widget's
 dark-mode colors follow the shopper's OS-level `prefers-color-scheme`,

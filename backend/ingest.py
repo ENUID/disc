@@ -9,6 +9,7 @@ It embeds each product's title + description + tags with fastembed
 LanceDB table at ./data/disc_lancedb. No network calls, no paid APIs.
 """
 
+import re
 from pathlib import Path
 
 import lancedb
@@ -160,6 +161,78 @@ CATALOG: list[Product] = [
 ]
 
 
+# A real Shopify catalog carries product_type, variants, a handle and a
+# full image set. The sample catalog above is written as plain prose, so
+# the storefront-experience fields are derived here rather than hand-
+# written fifteen times over — this keeps the demo table the same shape
+# as a real shop's table, which is what lets test.html exercise the same
+# detail/size/cart UI a merchant's shoppers see.
+_TYPE_KEYWORDS = [
+    (("cardigan", "hoodie", "sweater", "crewneck", "knit"), "Knitwear"),
+    (("overshirt", "shirt"), "Shirts"),
+    (("dress", "slip"), "Dresses"),
+    (("trouser", "denim", "shorts"), "Trousers"),
+    (("jacket", "shell", "overcoat", "vest"), "Outerwear"),
+    (("tank", "tee"), "Tops"),
+    (("base layer",), "Base Layers"),
+]
+
+_SIZES_BY_TYPE = {
+    "Trousers": ["28", "30", "32", "34", "36"],
+    "Dresses": ["XS", "S", "M", "L"],
+}
+_DEFAULT_SIZES = ["XS", "S", "M", "L", "XL"]
+
+
+def _infer_product_type(title: str) -> str:
+    lowered = title.lower()
+    for keywords, product_type in _TYPE_KEYWORDS:
+        if any(k in lowered for k in keywords):
+            return product_type
+    return "Accessories"
+
+
+def _handle_from_title(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+
+
+def _enrich_demo_product(product: Product) -> dict:
+    product_type = _infer_product_type(product.title)
+    handle = _handle_from_title(product.title)
+    sizes = _SIZES_BY_TYPE.get(product_type, _DEFAULT_SIZES)
+
+    # The sample catalog's original image_url pointed at a domain that
+    # doesn't exist, so every thumbnail rendered blank. Point it at the
+    # backend's own generated placeholder instead: the demo then looks
+    # designed rather than broken, and real shops override this entirely
+    # with their actual CDN images.
+    images = [f"/placeholder/{handle}-{i}.svg" for i in range(1, 4)]
+
+    return {
+        "id": product.id,
+        "title": product.title,
+        "description": product.description,
+        "price": product.price,
+        "image_url": images[0],
+        "tags": product.tags,
+        "handle": handle,
+        "product_type": product_type,
+        "images": images,
+        "variants": [
+            {
+                "id": f"{product.id}-{size}",
+                "title": size,
+                "price": product.price,
+                # One size deliberately sold out so the size picker's
+                # unavailable state is exercised by the demo too.
+                "available": size != "XS",
+            }
+            for size in sizes
+        ],
+        "colour": product.tags[0].title() if product.tags else "",
+    }
+
+
 def build_table() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     db = lancedb.connect(str(DB_PATH))
@@ -171,18 +244,11 @@ def build_table() -> None:
     print(f"Embedding {len(texts)} products...")
     vectors = list(embedder.embed(texts))
 
-    records = [
-        {
-            "id": product.id,
-            "title": product.title,
-            "description": product.description,
-            "price": product.price,
-            "image_url": product.image_url,
-            "tags": product.tags,
-            "vector": vector.tolist(),
-        }
-        for product, vector in zip(CATALOG, vectors)
-    ]
+    records = []
+    for product, vector in zip(CATALOG, vectors):
+        enriched = _enrich_demo_product(product)
+        enriched["vector"] = vector.tolist()
+        records.append(enriched)
 
     print(f"Writing table '{TABLE_NAME}' to {DB_PATH}...")
     db.create_table(TABLE_NAME, data=records, mode="overwrite")

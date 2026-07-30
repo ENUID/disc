@@ -38,19 +38,48 @@ def _strip_html(html: str | None) -> str:
 
 def product_to_record(product: dict) -> dict | None:
     """Admin API product JSON -> our flat record shape. Returns None for
-    products with no purchasable variant (nothing to show a price for)."""
-    variants = product.get("variants") or []
-    if not variants:
+    products with no purchasable variant (nothing to show a price for).
+
+    Variants, images, handle and product_type are carried through even
+    though search itself doesn't use them: the detail overlay needs the
+    image set, the size picker and add-to-cart need real variant ids,
+    links need the handle, and complete-the-look needs product_type to
+    tell "another cardigan" apart from "trousers that go with it".
+    """
+    raw_variants = product.get("variants") or []
+    if not raw_variants:
         return None
-    images = product.get("images") or []
+    images = [img["src"] for img in (product.get("images") or []) if img.get("src")]
     tags = [t.strip() for t in (product.get("tags") or "").split(",") if t.strip()]
+
+    variants = [
+        {
+            "id": str(v.get("id", "")),
+            "title": v.get("title", "") or "",
+            "price": float(v.get("price", 0) or 0),
+            # The Admin API omits inventory fields when tracking is off;
+            # absent should mean "buyable", not "sold out".
+            "available": v.get("inventory_quantity", 1) is None
+            or int(v.get("inventory_quantity", 1) or 0) > 0
+            or v.get("inventory_management") is None,
+        }
+        for v in raw_variants
+    ]
+
     return {
         "id": str(product["id"]),
         "title": product.get("title", ""),
         "description": _strip_html(product.get("body_html")),
-        "price": float(variants[0].get("price", 0) or 0),
-        "image_url": images[0]["src"] if images else "",
+        "price": float(raw_variants[0].get("price", 0) or 0),
+        "image_url": images[0] if images else "",
         "tags": tags,
+        "handle": product.get("handle", "") or "",
+        "product_type": product.get("product_type", "") or "",
+        "images": images,
+        "variants": variants,
+        # Shopify has no first-class colour field; option1 on the first
+        # variant is the near-universal convention for it.
+        "colour": (raw_variants[0].get("option1") or "") if raw_variants else "",
     }
 
 
@@ -137,6 +166,15 @@ def delete_shop_table(shop: str) -> None:
 
 # Used only to create an empty, correctly-typed table for a shop with zero
 # ingestible products, so later upsert_product() calls have a table to add to.
+_VARIANT_STRUCT = pa.struct(
+    [
+        pa.field("id", pa.string()),
+        pa.field("title", pa.string()),
+        pa.field("price", pa.float64()),
+        pa.field("available", pa.bool_()),
+    ]
+)
+
 _EMPTY_SCHEMA = pa.schema(
     [
         pa.field("id", pa.string()),
@@ -145,6 +183,11 @@ _EMPTY_SCHEMA = pa.schema(
         pa.field("price", pa.float64()),
         pa.field("image_url", pa.string()),
         pa.field("tags", pa.list_(pa.string())),
+        pa.field("handle", pa.string()),
+        pa.field("product_type", pa.string()),
+        pa.field("images", pa.list_(pa.string())),
+        pa.field("variants", pa.list_(_VARIANT_STRUCT)),
+        pa.field("colour", pa.string()),
         pa.field("vector", pa.list_(pa.float32(), 384)),
     ]
 )
