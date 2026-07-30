@@ -1383,8 +1383,11 @@
       bottom: calc(22px + env(safe-area-inset-bottom, 0px));
       z-index: 4; pointer-events: none;
     }
+    /* Centred horizontally by request. The reference sits this column on
+       the left; centring is a deliberate divergence, so flip
+       align-items back to flex-start to restore the reference layout. */
     .disc-detail-ui {
-      display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
       padding: 0 clamp(14px, 4vw, 40px);
       max-height: calc(100dvh - 96px);
       overflow: hidden;
@@ -1400,7 +1403,7 @@
        sits outside this box, so a short viewport (a phone in landscape) can
        never push Add to cart out of reach — it clips the chips instead. */
     .disc-detail-secondary {
-      display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
+      display: flex; flex-direction: column; align-items: center; gap: 10px;
       min-height: 0; overflow-y: auto; overscroll-behavior: contain;
       scrollbar-width: none;
     }
@@ -1410,7 +1413,7 @@
     /* Detail imagery fills the canvas; it scrolls sideways, not down. */
     .disc-body--detail { padding-bottom: 0; overflow-y: hidden; }
 
-    .disc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .disc-chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
     .disc-chip {
       display: inline-flex; align-items: center; gap: 9px;
       border: none; cursor: pointer; font: inherit;

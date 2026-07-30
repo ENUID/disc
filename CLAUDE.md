@@ -315,7 +315,14 @@ exactly one visible, usable search entry point on the page — Disc's own.
     reserves its height — it sits just above the safe-area inset. Detail
     imagery is full-height and scrolls horizontally so photography fills
     the canvas behind the card rather than ending in empty space.
-14. **The detail view's glass card lives in `.disc-overlay`, outside the
+14. **Everything is horizontally centred** — bar, results heading, chips,
+    look panel and buy card all sit on the viewport's centre line.
+    `centre_test.js` asserts each one is within 2px of centre at phone,
+    tablet and both desktop widths. Note this is a **deliberate
+    divergence from the reference**, which left-aligns the detail column;
+    it was requested. Flipping `.disc-detail-ui`/`.disc-detail-secondary`
+    back to `align-items: flex-start` restores the reference layout.
+15. **The detail view's glass card lives in `.disc-overlay`, outside the
     scrolling `.disc-body`.** This is deliberate and load-bearing: sticky
     positioning can't keep it pinned, because a sticky element stops as
     soon as its own parent's content ends — that bug left the card
@@ -326,21 +333,21 @@ exactly one visible, usable search entry point on the page — Disc's own.
     landscape phone, where the purchase card was completely unreachable.
     Only `.disc-chip-panel` is the flexible child; `.disc-chips` and
     `.disc-buy` are `flex-shrink: 0`.
-15. `[hidden] { display: none !important; }` is required — without it the
+16. `[hidden] { display: none !important; }` is required — without it the
     attribute is a no-op on anything given an explicit `display` value,
     which is why the Back button once appeared on the results view.
-16. Canvas chrome must be **theme-proof**: nav buttons and secondary text
+17. Canvas chrome must be **theme-proof**: nav buttons and secondary text
     derive from `--disc-ink` (with opacity) or neutral translucent grey,
     never hardcoded white/black. A merchant's canvas may be near-black,
     and a white pill on white is invisible — a bug the dark-theme test
     caught.
-17. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
+18. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
     the merchant's domain; Disc never proxies commerce. On a page that
     isn't a Shopify storefront there is no cart, so it resolves as
     `"demo"` and the UI says so plainly rather than faking success.
     A multi-size product refuses to add until a size is chosen, mirroring
     how real storefronts behave.
-18. The wishlist is `localStorage` only — no account, no PII, nothing sent
+19. The wishlist is `localStorage` only — no account, no PII, nothing sent
     to the backend. Toggling a heart updates every instance of that
     product on screen at once (grid card, look tray, detail card).
 
