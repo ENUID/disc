@@ -255,11 +255,18 @@
       });
     }
 
+    // Measured off the reference: over the store (nothing open) the bar
+    // floats in the lower third, centred at ~72% of viewport height (23dvh clearance below);
+    // once the canvas opens it docks to the bottom. Same bar, two
+    // resting positions, following what's happening.
     _updateBarOffset() {
-      var base = "max(20px, env(safe-area-inset-bottom, 20px))";
+      var base = this.isOpen()
+        ? "max(20px, env(safe-area-inset-bottom, 20px))"
+        : "max(20px, calc(23dvh + env(safe-area-inset-bottom, 0px)))";
       this._bar.style.bottom = this._keyboardOffset
         ? "calc(" + base + " + " + this._keyboardOffset + "px)"
         : base;
+      this._bar.style.transition = "bottom 0.45s cubic-bezier(0.22, 1, 0.36, 1)";
     }
 
     _bindEvents() {
@@ -447,6 +454,7 @@
     // -----------------------------------------------------------------
     openCanvas() {
       this._canvas.classList.add("disc-canvas--visible");
+      this._updateBarOffset();
       this.style.pointerEvents = "auto";
       // The store shouldn't scroll behind a full takeover.
       document.documentElement.style.overflow = "hidden";
@@ -458,6 +466,7 @@
       this._canvas.classList.remove("disc-canvas--visible");
       this.style.pointerEvents = "none";
       document.documentElement.style.overflow = "";
+      this._updateBarOffset();
       this._stopLoadingRotation();
       this._view = null;
       this._backBtn.hidden = true;

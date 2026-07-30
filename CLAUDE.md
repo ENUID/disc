@@ -205,11 +205,17 @@ actual servers — see "Going live" below for what that requires.
 exactly one visible, usable search entry point on the page — Disc's own.
 
 1. `<disc-search-bar>` mounts and is immediately usable: `position:
-   fixed`, centered near the bottom of the viewport (`bottom: max(20px,
-   env(safe-area-inset-bottom))`, `width: min(640px, calc(100vw -
-   32px))`). It is **not** positioned relative to the native search input
-   — it doesn't need to know where that is, or even whether one exists,
-   to render and function.
+   fixed`, horizontally centred, `width: min(640px, calc(100vw - 32px))`.
+   It is **not** positioned relative to the native search input — it
+   doesn't need to know where that is, or even whether one exists, to
+   render and function.
+   **It has two resting heights, measured off the reference.** Idle over
+   the store it floats in the lower third, centred at ~72% of viewport
+   height (`bottom: 23dvh`); once the canvas opens it docks to the bottom
+   (`bottom: max(20px, env(safe-area-inset-bottom))`, bar bottom ~97%).
+   `_updateBarOffset()` owns both, and is re-run on open/close — the
+   keyboard offset stacks on top of whichever is current. A test asserts
+   both positions against the values measured from the recording.
 2. Separately, a `DOMScanner` polls every 500ms for a native input
    matching `input[name="q"], input[type="search"]` (extend selectors as
    needed per-theme). Once found, the interval clears and the input is
