@@ -453,6 +453,7 @@
     }
 
     closeCanvas() {
+      this._bar.hidden = false;
       this._clearOverlay();
       this._canvas.classList.remove("disc-canvas--visible");
       this.style.pointerEvents = "none";
@@ -517,6 +518,7 @@
     // -----------------------------------------------------------------
     showLoading() {
       this._view = "loading";
+      this._bar.hidden = false;
       this._clearOverlay();
       this._backBtn.hidden = true;
       this._body.innerHTML =
@@ -563,6 +565,7 @@
 
     showMessage(title, body) {
       this._view = "message";
+      this._bar.hidden = false;
       this._clearOverlay();
       this._stopLoadingRotation();
       this._backBtn.hidden = true;
@@ -580,6 +583,7 @@
 
     renderResults(results, query) {
       this._view = "results";
+      this._bar.hidden = false;
       this._clearOverlay();
       this._stopLoadingRotation();
       this._results = results || [];
@@ -667,6 +671,8 @@
 
     renderDetail(p) {
       var wished = this._wishlist.indexOf(p.id) !== -1;
+      // One bar at a time: the product bar takes the search bar's place.
+      this._bar.hidden = true;
       var images = (p.images && p.images.length ? p.images : [p.image_url])
         .map(function (src) {
           return (
@@ -1341,22 +1347,35 @@
     .disc-heart--lg { position: static; width: 36px; height: 36px; background: transparent; }
 
     /* ---------------- detail ---------------- */
-    .disc-shots { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1px; }
-    .disc-shot { aspect-ratio: 3 / 4; background: rgba(128,128,128,0.12); }
+    /* Full-height imagery the card floats over, scrolled horizontally —
+       the reference fills the screen with photography rather than
+       stacking shots above a band of empty canvas. */
+    .disc-shots {
+      display: flex; height: 100%; gap: 1px;
+      overflow-x: auto; overflow-y: hidden;
+      scrollbar-width: none; -webkit-overflow-scrolling: touch;
+      scroll-snap-type: x mandatory;
+    }
+    .disc-shots::-webkit-scrollbar { display: none; }
+    .disc-shot {
+      flex: 0 0 min(58%, 620px); height: 100%;
+      background: rgba(128,128,128,0.12); scroll-snap-align: start;
+    }
     .disc-shot img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    @media (max-width: 700px) { .disc-shot { flex: 0 0 86%; } }
 
     /* Pinned above the bar, outside the scroll flow, so product imagery
        scrolls behind a stationary card — the arrangement the reference
        experience uses. */
     .disc-overlay {
       position: absolute; left: 0; right: 0;
-      bottom: calc(128px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(22px + env(safe-area-inset-bottom, 0px));
       z-index: 4; pointer-events: none;
     }
     .disc-detail-ui {
       display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
       padding: 0 clamp(14px, 4vw, 40px);
-      max-height: calc(100dvh - 170px);
+      max-height: calc(100dvh - 96px);
       overflow: hidden;
     }
     .disc-detail-ui > * { pointer-events: auto; }
@@ -1377,7 +1396,8 @@
     .disc-detail-secondary::-webkit-scrollbar { display: none; }
     .disc-buy { flex-shrink: 0; }
     /* Detail imagery needs to clear both the bar and the pinned card. */
-    .disc-body--detail { padding-bottom: 340px; }
+    /* Detail imagery fills the canvas; it scrolls sideways, not down. */
+    .disc-body--detail { padding-bottom: 0; overflow-y: hidden; }
 
     .disc-chips { display: flex; gap: 8px; flex-wrap: wrap; }
     .disc-chip {
@@ -1590,7 +1610,7 @@
     .disc-thumb-rm svg { width: 10px; height: 10px; }
 
     @media (max-height: 520px) {
-      .disc-overlay { bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
+      .disc-overlay { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
       .disc-buy-thumb { width: 44px; height: 54px; }
       .disc-look-card { aspect-ratio: 3 / 2; }
       .disc-round { width: 44px; height: 44px; }

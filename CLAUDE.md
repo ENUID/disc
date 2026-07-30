@@ -17,7 +17,9 @@ bar (always docked)   single-row pill: [+] query text [x] [^]
   -> loading canvas   ornament + rotating serif headline + line drawing
   -> results canvas   "Get inspired by these creations" + editorial grid
                       (image, heart, name + chevron — nothing else)
-  -> product detail   full-bleed imagery + floating glass card
+  -> product detail   full-height imagery, scrolled sideways, with the
+                      product bar floating over it — the search bar is
+                      HIDDEN here; never two bars stacked at once
                       MATERIALS + / HOW TO STYLE + chips above the card;
                       card = thumb, title, heart, price, colour,
                       [Add to cart] [Select size] [x]
@@ -286,7 +288,15 @@ exactly one visible, usable search entry point on the page — Disc's own.
     the row; **it is not yet wired to visual search**, because there is no
     image-embedding pipeline behind it (see the note at the end of this
     section).
-13. **The detail view's glass card lives in `.disc-overlay`, outside the
+13. **One bar at a time.** Opening a product hides the docked search bar
+    (`this._bar.hidden = true`) and the product bar takes its place;
+    leaving the detail view restores it. The reference never stacks a
+    product bar under a search bar, and doing so wasted a band of screen.
+    Because the search bar is hidden there, `.disc-overlay` no longer
+    reserves its height — it sits just above the safe-area inset. Detail
+    imagery is full-height and scrolls horizontally so photography fills
+    the canvas behind the card rather than ending in empty space.
+14. **The detail view's glass card lives in `.disc-overlay`, outside the
     scrolling `.disc-body`.** This is deliberate and load-bearing: sticky
     positioning can't keep it pinned, because a sticky element stops as
     soon as its own parent's content ends — that bug left the card
@@ -297,21 +307,21 @@ exactly one visible, usable search entry point on the page — Disc's own.
     landscape phone, where the purchase card was completely unreachable.
     Only `.disc-chip-panel` is the flexible child; `.disc-chips` and
     `.disc-buy` are `flex-shrink: 0`.
-14. `[hidden] { display: none !important; }` is required — without it the
+15. `[hidden] { display: none !important; }` is required — without it the
     attribute is a no-op on anything given an explicit `display` value,
     which is why the Back button once appeared on the results view.
-15. Canvas chrome must be **theme-proof**: nav buttons and secondary text
+16. Canvas chrome must be **theme-proof**: nav buttons and secondary text
     derive from `--disc-ink` (with opacity) or neutral translucent grey,
     never hardcoded white/black. A merchant's canvas may be near-black,
     and a white pill on white is invisible — a bug the dark-theme test
     caught.
-16. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
+17. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
     the merchant's domain; Disc never proxies commerce. On a page that
     isn't a Shopify storefront there is no cart, so it resolves as
     `"demo"` and the UI says so plainly rather than faking success.
     A multi-size product refuses to add until a size is chosen, mirroring
     how real storefronts behave.
-17. The wishlist is `localStorage` only — no account, no PII, nothing sent
+18. The wishlist is `localStorage` only — no account, no PII, nothing sent
     to the backend. Toggling a heart updates every instance of that
     product on screen at once (grid card, look tray, detail card).
 
