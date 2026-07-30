@@ -12,13 +12,26 @@ The shape of the experience is modelled on Brunello Cucinelli's "AI
 Online Boutique" (the reference the user supplied as a screen recording):
 
 ```
-bar (always docked)
+bar (always docked)   single-row pill: [+] query text [x] [^]
+                      [+] swaps the row for a tools pill: [x] | clip | compose
   -> loading canvas   ornament + rotating serif headline + line drawing
   -> results canvas   "Get inspired by these creations" + editorial grid
+                      (image, heart, name + chevron — nothing else)
   -> product detail   full-bleed imagery + floating glass card
-                      (MATERIALS / HOW TO STYLE, price, colour, sizes,
-                       Add to cart, complete-the-look tray)
+                      MATERIALS + / HOW TO STYLE + chips above the card;
+                      card = thumb, title, heart, price, colour,
+                      [Add to cart] [Select size] [x]
+                      expanding a chip shows its panel and collapses the
+                      card to a compact pill: [Add to cart] title/price [x]
+                      HOW TO STYLE = paged 2x2 look grid with < > and dots
 ```
+
+**Match the reference exactly; don't add to it.** This layout is taken
+from a screen recording of the reference experience, frame by frame. Two
+things were invented in an earlier pass and had to be removed: match
+rationale printed under every result card, and a `for "<query>"`
+subheading. If something isn't in the recording, it doesn't belong on
+screen.
 
 **The brand layer is data, never code.** Disc is sold to many stores, so
 canvas colour, ink, serif stack, headline copy, loading messages and the
@@ -265,39 +278,50 @@ exactly one visible, usable search entry point on the page — Disc's own.
     merchant's page; only the bar (and the canvas, once open) are
     interactive. Opening also locks `documentElement.overflow` so the
     store doesn't scroll behind the takeover.
-12. **The detail view's glass card lives in `.disc-overlay`, outside the
+12. The bar is a **single-row pill**, not a two-row stack: round `+` at
+    the left, textarea between, round send at the right, with a small
+    clear appearing beside send once there is text. `+` hides
+    `.disc-bar-inner` and shows `.disc-tools` — close / attach / compose,
+    separated by hairline dividers. Attaching a photo previews it above
+    the row; **it is not yet wired to visual search**, because there is no
+    image-embedding pipeline behind it (see the note at the end of this
+    section).
+13. **The detail view's glass card lives in `.disc-overlay`, outside the
     scrolling `.disc-body`.** This is deliberate and load-bearing: sticky
     positioning can't keep it pinned, because a sticky element stops as
     soon as its own parent's content ends — that bug left the card
     floating mid-page. Within the overlay only `.disc-detail-secondary`
     (chips, panels, look tray) scrolls; `.disc-buy` is `flex-shrink: 0`,
-    so on a short viewport the chips clip rather than Add-to-cart being
+    so on a short viewport the panel clips rather than Add-to-cart being
     pushed out of reach. That was a real bug found on a 390px-tall
     landscape phone, where the purchase card was completely unreachable.
-13. `[hidden] { display: none !important; }` is required — without it the
+    Only `.disc-chip-panel` is the flexible child; `.disc-chips` and
+    `.disc-buy` are `flex-shrink: 0`.
+14. `[hidden] { display: none !important; }` is required — without it the
     attribute is a no-op on anything given an explicit `display` value,
     which is why the Back button once appeared on the results view.
-14. Canvas chrome must be **theme-proof**: nav buttons and secondary text
+15. Canvas chrome must be **theme-proof**: nav buttons and secondary text
     derive from `--disc-ink` (with opacity) or neutral translucent grey,
     never hardcoded white/black. A merchant's canvas may be near-black,
     and a white pill on white is invisible — a bug the dark-theme test
     caught.
-15. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
+16. Add-to-cart posts to Shopify's own AJAX Cart API (`/cart/add.js`) on
     the merchant's domain; Disc never proxies commerce. On a page that
     isn't a Shopify storefront there is no cart, so it resolves as
     `"demo"` and the UI says so plainly rather than faking success.
     A multi-size product refuses to add until a size is chosen, mirroring
     how real storefronts behave.
-16. The wishlist is `localStorage` only — no account, no PII, nothing sent
+17. The wishlist is `localStorage` only — no account, no PII, nothing sent
     to the backend. Toggling a heart updates every instance of that
     product on screen at once (grid card, look tray, detail card).
 
-There is no photo-attachment/visual-search capability, deliberately. Both
-reference implementations had one (attach a photo, search visually), but
-our backend has no image-embedding pipeline, and the user explicitly
-asked for that icon to be removed rather than ship a button that looks
-functional but does nothing. Don't re-add it without both a real backend
-capability behind it and the user asking for it.
+**Open question — the attach button.** The reference bar's `+` menu has a
+paperclip, so it is present here for fidelity, and attaching a photo does
+really preview it. But nothing searches by that image: the backend has no
+image-embedding pipeline. `fastembed` does ship CLIP-style image
+embeddings, so this is buildable — it just isn't built. Until it is,
+attaching a photo and sending falls back to the text query. Either wire it
+up or drop the button; don't leave it looking functional indefinitely.
 
 ### Design system
 

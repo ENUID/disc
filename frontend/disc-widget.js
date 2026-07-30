@@ -84,6 +84,9 @@
       this._selectedVariantId = null;
       this._loadingTimer = null;
       this._wishlist = loadWishlist();
+      this._photos = [];
+      this._lookItems = [];
+      this._lookPage = 0;
       this._buildDom();
     }
 
@@ -132,21 +135,26 @@
       this._canvas.appendChild(this._overlay);
 
       // --- the docked bar --------------------------------------------
+      // A single-row pill: round + at the left, query text between, round
+      // send at the right, with a clear appearing beside send once there
+      // is text. Tapping + swaps the row for a nested tools pill.
       this._bar = document.createElement("div");
       this._bar.className = "disc-bar";
 
-      var inputRow = document.createElement("div");
-      inputRow.className = "disc-bar-row disc-bar-row--input";
+      this._barInner = document.createElement("div");
+      this._barInner.className = "disc-bar-inner";
+
+      this._plusBtn = document.createElement("button");
+      this._plusBtn.type = "button";
+      this._plusBtn.className = "disc-round disc-plus";
+      this._plusBtn.setAttribute("aria-label", "More");
+      this._plusBtn.innerHTML = DISC_PLUS_ICON;
 
       this._input = document.createElement("textarea");
       this._input.className = "disc-input";
       this._input.rows = 1;
       this._input.placeholder = "What are you looking for?";
       this._input.setAttribute("aria-label", "Search products");
-      inputRow.appendChild(this._input);
-
-      var controlsRow = document.createElement("div");
-      controlsRow.className = "disc-bar-row disc-bar-row--controls";
 
       this._clearBtn = document.createElement("button");
       this._clearBtn.type = "button";
@@ -157,16 +165,47 @@
 
       this._sendBtn = document.createElement("button");
       this._sendBtn.type = "button";
-      this._sendBtn.className = "disc-send";
+      this._sendBtn.className = "disc-round disc-send";
       this._sendBtn.disabled = true;
       this._sendBtn.setAttribute("aria-label", "Search");
       this._sendBtn.innerHTML = DISC_SEND_ICON;
 
-      controlsRow.appendChild(this._clearBtn);
-      controlsRow.appendChild(this._sendBtn);
+      this._barInner.appendChild(this._plusBtn);
+      this._barInner.appendChild(this._input);
+      this._barInner.appendChild(this._clearBtn);
+      this._barInner.appendChild(this._sendBtn);
 
-      this._bar.appendChild(inputRow);
-      this._bar.appendChild(controlsRow);
+      this._tools = document.createElement("div");
+      this._tools.className = "disc-tools";
+      this._tools.hidden = true;
+      this._tools.innerHTML =
+        '<button type="button" class="disc-tool disc-tool-close" aria-label="Close">' +
+        DISC_CLOSE_ICON +
+        "</button>" +
+        '<span class="disc-tool-div"></span>' +
+        '<button type="button" class="disc-tool disc-tool-attach" aria-label="Attach a photo">' +
+        DISC_CLIP_ICON +
+        "</button>" +
+        '<span class="disc-tool-div"></span>' +
+        '<button type="button" class="disc-tool disc-tool-write" aria-label="Write">' +
+        DISC_COMPOSE_ICON +
+        "</button>";
+
+      // Attached-photo previews, shown above the row like the reference.
+      this._thumbs = document.createElement("div");
+      this._thumbs.className = "disc-thumbs";
+      this._thumbs.hidden = true;
+
+      this._fileInput = document.createElement("input");
+      this._fileInput.type = "file";
+      this._fileInput.accept = "image/*";
+      this._fileInput.multiple = true;
+      this._fileInput.style.display = "none";
+
+      this._bar.appendChild(this._thumbs);
+      this._bar.appendChild(this._barInner);
+      this._bar.appendChild(this._tools);
+      this._bar.appendChild(this._fileInput);
 
       wrap.appendChild(this._canvas);
       wrap.appendChild(this._bar);
@@ -259,6 +298,28 @@
         self._input.focus();
       });
 
+      this._plusBtn.addEventListener("click", function () {
+        self._setTools(true);
+      });
+      this._tools.querySelector(".disc-tool-close").addEventListener("click", function () {
+        self._setTools(false);
+      });
+      this._tools.querySelector(".disc-tool-attach").addEventListener("click", function () {
+        self._fileInput.click();
+      });
+      this._tools.querySelector(".disc-tool-write").addEventListener("click", function () {
+        self._setTools(false);
+        self._input.focus();
+      });
+      this._fileInput.addEventListener("change", function (e) {
+        self._attachPhotos(e.target.files);
+        self._fileInput.value = "";
+      });
+      this._thumbs.addEventListener("click", function (e) {
+        var rm = e.target.closest("[data-rm]");
+        if (rm) self._removePhoto(Number(rm.getAttribute("data-rm")));
+      });
+
       this._closeBtn.addEventListener("click", function () {
         self.closeCanvas();
       });
@@ -289,14 +350,24 @@
         }
         var chip = e.target.closest("[data-chip]");
         if (chip) {
-          var panel = self._canvas.querySelector(
-            '[data-chip-panel="' + chip.getAttribute("data-chip") + '"]'
-          );
-          if (panel) {
-            var open = panel.hasAttribute("hidden");
-            panel.toggleAttribute("hidden", !open);
-            chip.classList.toggle("disc-chip--open", open);
-          }
+          self._toggleChip(chip.getAttribute("data-chip"));
+          return;
+        }
+        var pager = e.target.closest("[data-look-page]");
+        if (pager) {
+          var dir = Number(pager.getAttribute("data-look-page"));
+          var pages = Math.max(1, Math.ceil(self._lookItems.length / 4));
+          self._lookPage = (self._lookPage + dir + pages) % pages;
+          self._paintLookPage();
+          return;
+        }
+        if (e.target.closest("[data-select-size]")) {
+          var sizeRow = self._overlay.querySelector(".disc-sizes");
+          if (sizeRow) sizeRow.hidden = !sizeRow.hidden;
+          return;
+        }
+        if (e.target.closest("[data-close-detail]")) {
+          self.renderResults(self._results, self._lastQuery);
           return;
         }
         var size = e.target.closest("[data-variant]");
@@ -308,6 +379,48 @@
           self._addToCart();
         }
       });
+    }
+
+    _setTools(open) {
+      this._tools.hidden = !open;
+      this._barInner.hidden = open;
+    }
+
+    _attachPhotos(files) {
+      if (!files || !files.length) return;
+      var self = this;
+      Array.prototype.slice.call(files, 0, 8).forEach(function (file) {
+        var reader = new FileReader();
+        reader.onload = function (ev) {
+          self._photos.push({ url: ev.target.result });
+          self._renderThumbs();
+        };
+        reader.readAsDataURL(file);
+      });
+      this._setTools(false);
+    }
+
+    _removePhoto(i) {
+      this._photos.splice(i, 1);
+      this._renderThumbs();
+    }
+
+    _renderThumbs() {
+      this._thumbs.hidden = this._photos.length === 0;
+      this._thumbs.innerHTML = this._photos
+        .map(function (p, i) {
+          return (
+            '<span class="disc-thumb"><img src="' +
+            escapeAttr(p.url) +
+            '" alt="">' +
+            '<button type="button" class="disc-thumb-rm" data-rm="' +
+            i +
+            '" aria-label="Remove">' +
+            DISC_CLOSE_ICON +
+            "</button></span>"
+          );
+        })
+        .join("");
     }
 
     // Grows the textarea up to 120px as content wraps, then it scrolls
@@ -487,9 +600,6 @@
         '<h2 class="disc-heading">' +
         escapeHtml(DISC_THEME.resultsHeading) +
         "</h2>" +
-        '<p class="disc-subhead">for “' +
-        escapeHtml(query) +
-        "”</p>" +
         "</header>" +
         '<div class="disc-grid">' +
         this._results.map(this._cardHtml.bind(this)).join("") +
@@ -526,9 +636,6 @@
         DISC_CHEVRON_RIGHT +
         "</span>" +
         "</div>" +
-        (item.reasoning
-          ? '<p class="disc-card-note">' + escapeHtml(item.reasoning) + "</p>"
-          : "") +
         "</article>"
       );
     }
@@ -570,6 +677,31 @@
         })
         .join("");
 
+      this._body.innerHTML = '<div class="disc-shots">' + images + "</div>";
+      this._body.classList.add("disc-body--detail");
+
+      this._overlay.hidden = false;
+      this._overlay.innerHTML =
+        '<div class="disc-detail-ui">' +
+        '<div class="disc-chips">' +
+        '<button class="disc-chip" data-chip="materials">MATERIALS <i>+</i></button>' +
+        '<button class="disc-chip" data-chip="style">HOW TO STYLE <i>+</i></button>' +
+        "</div>" +
+        '<div class="disc-chip-panel" data-chip-panel="materials" hidden>' +
+        escapeHtml(p.description || "") +
+        "</div>" +
+        '<div class="disc-chip-panel disc-chip-panel--look" data-chip-panel="style" hidden></div>' +
+        this._buyHtml(p, wished) +
+        "</div>";
+
+      this.openCanvas();
+      this._body.scrollTop = 0;
+    }
+
+    // Two states, exactly as the reference shows them: the full card by
+    // default, and a compact pill (Add to cart | title/price | close) once
+    // a chip panel is expanded, so the panel gets the room.
+    _buyHtml(p, wished) {
       var sizes = (p.variants || [])
         .map(function (v) {
           return (
@@ -586,26 +718,9 @@
         })
         .join("");
 
-      this._body.innerHTML = '<div class="disc-shots">' + images + "</div>";
-      this._body.classList.add("disc-body--detail");
-
-      this._overlay.hidden = false;
-      this._overlay.innerHTML =
-        '<div class="disc-detail-ui">' +
-        '<div class="disc-detail-secondary">' +
-        '<div class="disc-chips">' +
-        '<button class="disc-chip" data-chip="materials">MATERIALS <i>+</i></button>' +
-        '<button class="disc-chip" data-chip="style">HOW TO STYLE <i>+</i></button>' +
-        "</div>" +
-        '<div class="disc-chip-panel" data-chip-panel="materials" hidden>' +
-        escapeHtml(p.description || "") +
-        "</div>" +
-        '<div class="disc-chip-panel" data-chip-panel="style" hidden>' +
-        escapeHtml(p.reasoning || "") +
-        "</div>" +
-        '<div class="disc-look" hidden></div>' +
-        "</div>" +
+      return (
         '<div class="disc-buy">' +
+        '<div class="disc-buy-full">' +
         '<div class="disc-buy-head">' +
         '<img class="disc-buy-thumb" src="' +
         escapeAttr(absoluteUrl(p.image_url)) +
@@ -629,51 +744,127 @@
         DISC_HEART_ICON +
         "</button>" +
         "</div>" +
-        (sizes ? '<div class="disc-sizes">' + sizes + "</div>" : "") +
+        (sizes ? '<div class="disc-sizes" hidden>' + sizes + "</div>" : "") +
         '<div class="disc-buy-actions">' +
         '<button class="disc-btn disc-btn--primary" data-add-to-cart>Add to cart</button>' +
+        (sizes
+          ? '<button class="disc-btn disc-btn--ghost" data-select-size>Select size</button>'
+          : "") +
+        '<button class="disc-buy-close" data-close-detail aria-label="Close">' +
+        DISC_CLOSE_ICON +
+        "</button>" +
         '<span class="disc-buy-hint"></span>' +
         "</div>" +
-        "</div></div>";
-
-      this.openCanvas();
-      this._body.scrollTop = 0;
+        "</div>" +
+        '<div class="disc-buy-compact" hidden>' +
+        '<button class="disc-btn disc-btn--primary" data-add-to-cart>Add to cart</button>' +
+        '<div class="disc-buy-compact-meta">' +
+        '<div class="disc-buy-title">' +
+        escapeHtml(p.title) +
+        "</div>" +
+        '<div class="disc-buy-price">' +
+        formatPrice(p.price, p.currency) +
+        "</div>" +
+        "</div>" +
+        '<button class="disc-buy-close" data-close-detail aria-label="Close">' +
+        DISC_CLOSE_ICON +
+        "</button>" +
+        "</div>" +
+        "</div>"
+      );
     }
 
+    // The reference expands HOW TO STYLE into a paged 2-column grid of
+    // complementary pieces with prev/next and dot pagination.
     _renderLook(items) {
-      var host = this._overlay.querySelector(".disc-look");
-      if (!host || !items.length) return;
-      host.hidden = false;
+      this._lookItems = items || [];
+      this._lookPage = 0;
+      var host = this._overlay.querySelector('[data-chip-panel="style"]');
+      if (!host || !this._lookItems.length) return;
+      this._paintLookPage();
+    }
+
+    _paintLookPage() {
+      var host = this._overlay.querySelector('[data-chip-panel="style"]');
+      if (!host) return;
+      var perPage = 4;
+      var pages = Math.max(1, Math.ceil(this._lookItems.length / perPage));
+      var page = Math.min(this._lookPage, pages - 1);
+      var slice = this._lookItems.slice(page * perPage, page * perPage + perPage);
+
+      var cards = slice
+        .map(
+          function (it) {
+            var wished = this._wishlist.indexOf(it.id) !== -1;
+            return (
+              '<div class="disc-look-card" data-product="' +
+              escapeAttr(it.id) +
+              '">' +
+              '<img src="' +
+              escapeAttr(absoluteUrl(it.image_url)) +
+              '" alt="" loading="lazy">' +
+              '<button class="disc-heart disc-heart--sm' +
+              (wished ? " disc-heart--on" : "") +
+              '" data-wish="' +
+              escapeAttr(it.id) +
+              '" aria-label="Save">' +
+              DISC_HEART_ICON +
+              "</button></div>"
+            );
+          }.bind(this)
+        )
+        .join("");
+
+      var dots = "";
+      for (var i = 0; i < pages; i++) {
+        dots += '<span class="disc-dot' + (i === page ? " disc-dot--on" : "") + '"></span>';
+      }
+
       host.innerHTML =
-        '<div class="disc-look-title">Complete the look</div>' +
-        '<div class="disc-look-row">' +
-        items
-          .map(
-            function (it) {
-              var wished = this._wishlist.indexOf(it.id) !== -1;
-              return (
-                '<div class="disc-look-item" data-product="' +
-                escapeAttr(it.id) +
-                '">' +
-                '<img src="' +
-                escapeAttr(absoluteUrl(it.image_url)) +
-                '" alt="" loading="lazy">' +
-                '<button class="disc-heart disc-heart--sm' +
-                (wished ? " disc-heart--on" : "") +
-                '" data-wish="' +
-                escapeAttr(it.id) +
-                '" aria-label="Save">' +
-                DISC_HEART_ICON +
-                "</button>" +
-                '<span class="disc-look-name">' +
-                escapeHtml(it.title) +
-                "</span>" +
-                "</div>"
-              );
-            }.bind(this)
-          )
-          .join("") +
-        "</div>";
+        '<div class="disc-look-grid">' +
+        cards +
+        "</div>" +
+        (pages > 1
+          ? '<div class="disc-look-nav">' +
+            '<button class="disc-look-arrow" data-look-page="-1" aria-label="Previous">' +
+            DISC_CHEVRON_LEFT +
+            "</button>" +
+            '<div class="disc-dots">' +
+            dots +
+            "</div>" +
+            '<button class="disc-look-arrow" data-look-page="1" aria-label="Next">' +
+            DISC_CHEVRON_RIGHT +
+            "</button></div>"
+          : "");
+    }
+
+    // Only one panel open at a time, and an open panel collapses the buy
+    // card to its compact pill so the panel has room — the arrangement
+    // the reference uses.
+    _toggleChip(name) {
+      var panels = this._overlay.querySelectorAll("[data-chip-panel]");
+      var chips = this._overlay.querySelectorAll("[data-chip]");
+      var target = this._overlay.querySelector('[data-chip-panel="' + name + '"]');
+      var opening = target && target.hasAttribute("hidden");
+
+      panels.forEach(function (pnl) {
+        pnl.toggleAttribute("hidden", true);
+      });
+      chips.forEach(function (c) {
+        c.classList.remove("disc-chip--open");
+      });
+      if (opening && target) {
+        target.removeAttribute("hidden");
+        var chip = this._overlay.querySelector('[data-chip="' + name + '"]');
+        if (chip) chip.classList.add("disc-chip--open");
+      }
+
+      var full = this._overlay.querySelector(".disc-buy-full");
+      var compact = this._overlay.querySelector(".disc-buy-compact");
+      if (full && compact) {
+        full.toggleAttribute("hidden", !!opening);
+        compact.toggleAttribute("hidden", !opening);
+      }
     }
 
     _selectVariant(variantId, el) {
@@ -835,7 +1026,13 @@
   }
 
   function fetchLook(id) {
-    return fetch(CONFIG.apiUrl + "/look/" + encodeURIComponent(id) + shopParam()).then(
+    // Ask for two pages' worth so the grid pages the way the reference
+    // does; the backend still caps this at one piece per category, so a
+    // small catalog simply yields fewer pages.
+    var sep = shopParam() ? "&" : "?";
+    return fetch(
+      CONFIG.apiUrl + "/look/" + encodeURIComponent(id) + shopParam() + sep + "limit=8"
+    ).then(
       function (res) {
         if (!res.ok) throw new Error("Disc look failed: " + res.status);
         return res.json();
@@ -936,6 +1133,23 @@
     'stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   var DISC_BUSY_ICON = '<span class="disc-busy-square" aria-hidden="true"></span>';
+
+  var DISC_PLUS_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="1.6" ' +
+    'stroke-linecap="round"/></svg>';
+
+  var DISC_CLIP_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M20 11.5l-7.8 7.8a4.6 4.6 0 0 1-6.5-6.5l8-8a3 3 0 0 1 4.3 4.3l-8 8a1.5 1.5 0 0 1-2.1-2.1l7.2-7.2" ' +
+    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  var DISC_COMPOSE_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M5 8.5A3.5 3.5 0 0 1 8.5 5H13M19 12.5v3A3.5 3.5 0 0 1 15.5 19h-7A3.5 3.5 0 0 1 5 15.5V12" ' +
+    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>' +
+    '<path d="M11 13l7.4-7.4a1.7 1.7 0 0 1 2.4 2.4L13.4 15.4 10 16z" ' +
+    'stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   var DISC_CLOSE_ICON =
     '<svg viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
@@ -1087,7 +1301,6 @@
       font-size: clamp(26px, 4.4vw, 44px);
       font-weight: 400; letter-spacing: -0.015em; line-height: 1.15;
     }
-    .disc-subhead { font-size: 13px; color: var(--disc-ink); opacity: 0.6; font-style: italic; }
 
     .disc-grid {
       display: grid;
@@ -1109,11 +1322,6 @@
     }
     .disc-card-title { font-size: 13.5px; letter-spacing: 0.01em; }
     .disc-card-chevron svg { width: 13px; height: 13px; opacity: 0.5; display: block; }
-    .disc-card-note {
-      font-size: 11.5px; line-height: 1.45; color: var(--disc-ink); opacity: 0.62;
-      padding: 0 16px 16px;
-      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-    }
 
     .disc-heart {
       position: absolute; right: 10px; bottom: 10px;
@@ -1142,15 +1350,22 @@
        experience uses. */
     .disc-overlay {
       position: absolute; left: 0; right: 0;
-      bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+      bottom: calc(128px + env(safe-area-inset-bottom, 0px));
       z-index: 4; pointer-events: none;
     }
     .disc-detail-ui {
       display: flex; flex-direction: column; align-items: flex-start; gap: 10px;
       padding: 0 clamp(14px, 4vw, 40px);
-      max-height: calc(100dvh - 200px);
+      max-height: calc(100dvh - 170px);
+      overflow: hidden;
     }
     .disc-detail-ui > * { pointer-events: auto; }
+    /* The expandable panel is the only flexible child; chips and the buy
+       card never shrink, so a short viewport clips the panel rather than
+       pushing Add to cart out of reach. */
+    .disc-chips, .disc-buy { flex-shrink: 0; }
+    .disc-chip-panel { min-height: 0; overflow-y: auto; scrollbar-width: none; }
+    .disc-chip-panel::-webkit-scrollbar { display: none; }
     /* Only the secondary surfaces scroll. The buy card is flex-shrink:0 and
        sits outside this box, so a short viewport (a phone in landscape) can
        never push Add to cart out of reach — it clips the chips instead. */
@@ -1172,43 +1387,57 @@
       color: var(--disc-accent-contrast);
       background: rgba(60,58,55,0.55);
       backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
-      border-radius: 9999px; padding: 10px 16px;
+      border-radius: 9999px; padding: 11px 18px;
       transition: background-color 0.18s ease;
     }
     .disc-chip:hover { background: rgba(60,58,55,0.72); }
-    .disc-chip i { font-style: normal; opacity: 0.75; }
+    .disc-chip i { font-style: normal; opacity: 0.75; transition: transform 0.2s ease; }
     .disc-chip--open i { transform: rotate(45deg); display: inline-block; }
-    .disc-chip-panel {
-      max-width: 560px; font-size: 12.5px; line-height: 1.55;
-      color: var(--disc-accent-contrast);
-      background: rgba(60,58,55,0.6);
-      backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
-      border-radius: 18px; padding: 14px 18px;
-    }
 
-    .disc-look {
-      background: rgba(60,58,55,0.55);
+    .disc-chip-panel {
+      width: min(560px, calc(100vw - 28px));
+      font-size: 12.5px; line-height: 1.55;
+      color: var(--disc-accent-contrast);
+      background: rgba(60,58,55,0.58);
       backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
-      border-radius: 20px; padding: 12px 14px; color: var(--disc-accent-contrast);
-      max-width: min(560px, calc(100vw - 28px));
+      border-radius: 22px; padding: 16px 18px;
     }
-    .disc-look-title { font-size: 10.5px; letter-spacing: 0.11em; text-transform: uppercase; opacity: 0.8; margin-bottom: 10px; }
-    .disc-look-row { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
-    .disc-look-row::-webkit-scrollbar { display: none; }
-    .disc-look-item { position: relative; flex: 0 0 84px; cursor: pointer; }
-    .disc-look-item img { width: 84px; height: 104px; object-fit: cover; border-radius: 12px; display: block; }
-    .disc-look-name {
-      display: block; font-size: 10px; margin-top: 6px; opacity: 0.85;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 84px;
+    .disc-chip-panel--look { padding: 12px; width: min(460px, calc(100vw - 28px)); }
+
+    .disc-look-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .disc-look-card {
+      position: relative; border-radius: 18px; overflow: hidden; cursor: pointer;
+      background: rgba(255,255,255,0.9); aspect-ratio: 1 / 1;
     }
+    .disc-look-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    .disc-look-nav {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 4px 2px;
+    }
+    .disc-look-arrow {
+      width: 38px; height: 38px; border-radius: 9999px; cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.55); background: transparent;
+      color: var(--disc-accent-contrast);
+      display: flex; align-items: center; justify-content: center;
+      transition: background-color 0.15s ease;
+    }
+    .disc-look-arrow:hover { background: rgba(255,255,255,0.16); }
+    .disc-look-arrow svg { width: 15px; height: 15px; }
+    .disc-dots { display: flex; gap: 7px; }
+    .disc-dot { width: 7px; height: 7px; border-radius: 9999px; background: rgba(255,255,255,0.4); }
+    .disc-dot--on { background: #fff; }
 
     .disc-buy {
       background: rgba(60,58,55,0.58);
       backdrop-filter: blur(28px) saturate(190%); -webkit-backdrop-filter: blur(28px) saturate(190%);
-      border-radius: 22px; padding: 14px; color: var(--disc-accent-contrast);
-      width: min(520px, calc(100vw - 28px));
+      color: var(--disc-accent-contrast);
+      width: min(560px, calc(100vw - 28px));
       box-shadow: 0 18px 40px -14px rgba(0,0,0,0.4);
+      flex-shrink: 0;
+      border-radius: 26px;
     }
+    .disc-buy-full { padding: 14px; }
     .disc-buy-head { display: flex; align-items: flex-start; gap: 13px; }
     .disc-buy-thumb { width: 58px; height: 72px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
     .disc-buy-meta { flex: 1; min-width: 0; }
@@ -1216,27 +1445,53 @@
     .disc-buy-price { font-size: 13.5px; margin-top: 5px; font-variant-numeric: tabular-nums; }
     .disc-buy-colour { font-size: 12px; opacity: 0.75; margin-top: 3px; }
 
+    /* Compact state, shown while a chip panel is expanded. */
+    .disc-buy-compact {
+      display: flex; align-items: center; gap: 14px; padding: 10px 12px 10px 10px;
+    }
+    .disc-buy-compact-meta { flex: 1; min-width: 0; }
+    .disc-buy-compact .disc-buy-title { font-size: 14px; }
+    .disc-buy-compact .disc-buy-price { font-size: 12.5px; margin-top: 2px; opacity: 0.85; }
+
+    .disc-buy-close {
+      flex-shrink: 0; width: 40px; height: 40px; border-radius: 9999px;
+      border: none; cursor: pointer; background: rgba(255,255,255,0.14);
+      color: var(--disc-accent-contrast);
+      display: flex; align-items: center; justify-content: center;
+      transition: background-color 0.15s ease;
+    }
+    .disc-buy-close:hover { background: rgba(255,255,255,0.26); }
+    .disc-buy-close svg { width: 17px; height: 17px; }
+
     .disc-sizes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 13px; }
     .disc-size {
-      min-width: 42px; padding: 8px 11px; border-radius: 9999px; cursor: pointer; font: inherit;
+      min-width: 44px; padding: 9px 12px; border-radius: 9999px; cursor: pointer; font: inherit;
       font-size: 12.5px; color: var(--disc-accent-contrast);
       background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.2);
-      transition: background-color 0.15s ease, transform 0.15s cubic-bezier(0.34,1.56,0.64,1);
+      transition: background-color 0.15s ease;
     }
     .disc-size:hover:not(:disabled) { background: rgba(255,255,255,0.26); }
     .disc-size--on { background: #fff; color: var(--disc-ink); border-color: #fff; }
     .disc-size--out { opacity: 0.34; cursor: default; text-decoration: line-through; }
 
-    .disc-buy-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+    /* wrap so the hint drops to its own line instead of squeezing the
+       buttons until their labels break across lines */
+    .disc-buy-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
     .disc-btn {
       border: none; cursor: pointer; font: inherit; font-size: 13.5px;
-      border-radius: 9999px; padding: 12px 26px;
-      transition: transform 0.15s cubic-bezier(0.34,1.56,0.64,1), opacity 0.15s ease;
+      border-radius: 9999px; padding: 13px 26px;
+      white-space: nowrap; flex-shrink: 0;
+      transition: background-color 0.15s ease, transform 0.15s cubic-bezier(0.34,1.56,0.64,1);
     }
     .disc-btn--primary { background: #fff; color: var(--disc-ink); }
-    .disc-btn--primary:hover { transform: scale(1.03); }
     .disc-btn--primary:active { transform: scale(0.96); }
-    .disc-buy-hint { font-size: 11.5px; opacity: 0.85; }
+    .disc-btn--ghost {
+      background: transparent; color: var(--disc-accent-contrast);
+      border: 1px solid rgba(255,255,255,0.3);
+    }
+    .disc-btn--ghost:hover { background: rgba(255,255,255,0.14); }
+    .disc-buy-actions .disc-buy-close { margin-left: auto; }
+    .disc-buy-hint { font-size: 11.5px; opacity: 0.85; flex-basis: 100%; }
 
     /* ---------------- the docked bar ---------------- */
     .disc-bar {
@@ -1247,9 +1502,9 @@
       pointer-events: auto;
       z-index: 5;
       isolation: isolate;
-      display: flex; flex-direction: column; gap: 14px;
-      padding: 18px 20px 16px;
-      border-radius: 30px;
+      display: flex; flex-direction: column;
+      padding: 12px 12px 12px 14px;
+      border-radius: 9999px;
       border: 1px solid transparent;
       background-image:
         linear-gradient(180deg, var(--disc-glass-top), var(--disc-glass-bottom)),
@@ -1273,42 +1528,73 @@
       transition: --disc-mx 0.45s ease, --disc-my 0.45s ease, --disc-rim-angle 0.45s ease;
     }
 
-    .disc-bar-row--input { display: flex; }
-    .disc-bar-row--controls { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+    .disc-bar-inner { display: flex; align-items: center; gap: 10px; }
 
-    .disc-input {
-      flex: 1; min-width: 0; border: none; outline: none; background: transparent;
-      resize: none; overflow: hidden; font: inherit;
-      font-size: 16.5px; font-weight: 480; line-height: 1.5;
-      color: var(--disc-text); padding: 2px; min-height: 24px; max-height: 120px;
-    }
-    .disc-input::placeholder { color: var(--disc-text-secondary); }
-
-    .disc-clear, .disc-send {
-      flex-shrink: 0; width: 44px; height: 44px; border-radius: 9999px;
+    .disc-round {
+      flex-shrink: 0; width: 52px; height: 52px; border-radius: 9999px;
       display: flex; align-items: center; justify-content: center;
       border: none; padding: 0; cursor: pointer; font: inherit;
     }
-    .disc-clear { background: var(--disc-hover); color: var(--disc-text-secondary); }
-    .disc-clear:hover { background: rgba(0,0,0,0.12); }
-    .disc-clear svg { width: 16px; height: 16px; }
+    .disc-round svg { width: 20px; height: 20px; }
+    .disc-plus { background: rgba(120,120,128,0.18); color: var(--disc-text); }
+    .disc-plus:hover { background: rgba(120,120,128,0.28); }
     .disc-send {
       background: var(--disc-text); color: var(--disc-accent-contrast);
       /* transform is driven per-frame by bindPressSpring — animating it
          here too would fight that. */
       transition: background-color 0.15s ease, opacity 0.15s ease;
     }
-    .disc-send svg { width: 18px; height: 18px; }
-    .disc-send:disabled { background: rgba(120,120,128,0.18); color: var(--disc-text-secondary); cursor: default; opacity: 0.7; }
+    .disc-send:disabled { background: rgba(120,120,128,0.22); color: var(--disc-text-secondary); cursor: default; }
     .disc-send[data-loading="true"] { background: var(--disc-glass-top); border: 1px solid var(--disc-divider); cursor: default; }
-    .disc-busy-square { width: 11px; height: 11px; border-radius: 3px; background: var(--disc-text); display: block; }
+    .disc-busy-square { width: 12px; height: 12px; border-radius: 3px; background: var(--disc-text); display: block; }
+
+    .disc-clear {
+      flex-shrink: 0; width: 34px; height: 34px; border-radius: 9999px;
+      display: flex; align-items: center; justify-content: center;
+      border: none; padding: 0; cursor: pointer;
+      background: rgba(120,120,128,0.18); color: var(--disc-text-secondary);
+    }
+    .disc-clear:hover { background: rgba(120,120,128,0.3); }
+    .disc-clear svg { width: 15px; height: 15px; }
+
+    .disc-input {
+      flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+      resize: none; overflow: hidden; font: inherit;
+      font-size: 17px; font-weight: 450; line-height: 1.45;
+      color: var(--disc-text); padding: 0; min-height: 24px; max-height: 120px;
+    }
+    .disc-input::placeholder { color: var(--disc-text-secondary); }
+
+    /* The + menu: a nested pill that replaces the row. */
+    .disc-tools { display: flex; align-items: center; gap: 4px; height: 52px; }
+    .disc-tool {
+      width: 46px; height: 46px; border-radius: 9999px; border: none; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      background: transparent; color: var(--disc-text);
+      transition: background-color 0.15s ease;
+    }
+    .disc-tool:first-child { background: rgba(120,120,128,0.18); }
+    .disc-tool:hover { background: rgba(120,120,128,0.26); }
+    .disc-tool svg { width: 19px; height: 19px; }
+    .disc-tool-div { width: 1px; height: 20px; background: rgba(120,120,128,0.4); }
+
+    .disc-thumbs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+    .disc-thumb { position: relative; display: block; }
+    .disc-thumb img { width: 62px; height: 62px; object-fit: cover; border-radius: 12px; display: block; }
+    .disc-thumb-rm {
+      position: absolute; top: -6px; right: -6px; width: 20px; height: 20px;
+      border-radius: 9999px; border: 1.5px solid #fff; background: var(--disc-text);
+      color: #fff; cursor: pointer; padding: 0;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .disc-thumb-rm svg { width: 10px; height: 10px; }
 
     @media (max-height: 520px) {
-      .disc-overlay { bottom: calc(126px + env(safe-area-inset-bottom, 0px)); }
-      .disc-look-item { flex: 0 0 58px; }
-      .disc-look-item img { width: 58px; height: 72px; }
-      .disc-look-name { display: none; }
+      .disc-overlay { bottom: calc(120px + env(safe-area-inset-bottom, 0px)); }
       .disc-buy-thumb { width: 44px; height: 54px; }
+      .disc-look-card { aspect-ratio: 3 / 2; }
+      .disc-round { width: 44px; height: 44px; }
+      .disc-tools { height: 44px; }
     }
 
     @media (prefers-reduced-motion: reduce) {
