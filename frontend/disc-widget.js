@@ -1319,7 +1319,9 @@
 
     .disc-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+      /* min() keeps phones at two products per row rather than one
+         oversized column, while desktops still break at 240px. */
+      grid-template-columns: repeat(auto-fill, minmax(min(240px, 46%), 1fr));
       gap: 1px;
       background: rgba(128,128,128,0.22);
       border-top: 1px solid rgba(128,128,128,0.22);
@@ -1470,7 +1472,12 @@
     .disc-buy-head { display: flex; align-items: flex-start; gap: 13px; }
     .disc-buy-thumb { width: 58px; height: 72px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
     .disc-buy-meta { flex: 1; min-width: 0; }
-    .disc-buy-title { font-size: 15px; letter-spacing: -0.005em; }
+    /* One line with an ellipsis — a long title wrapped to three lines on a
+       narrow phone and made the bar disproportionately tall. */
+    .disc-buy-title {
+      font-size: 15px; letter-spacing: -0.005em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
     .disc-buy-price { font-size: 13.5px; margin-top: 5px; font-variant-numeric: tabular-nums; }
     .disc-buy-colour { font-size: 12px; opacity: 0.75; margin-top: 3px; }
 
@@ -1617,6 +1624,14 @@
       display: flex; align-items: center; justify-content: center;
     }
     .disc-thumb-rm svg { width: 10px; height: 10px; }
+
+    /* Narrow phones: trim the button so the product title keeps a
+       readable amount of room beside it. */
+    @media (max-width: 400px) {
+      .disc-btn { padding: 12px 18px; font-size: 13px; }
+      .disc-buy-compact { gap: 10px; padding: 10px; }
+      .disc-buy-close { width: 36px; height: 36px; }
+    }
 
     @media (max-height: 520px) {
       .disc-overlay { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }

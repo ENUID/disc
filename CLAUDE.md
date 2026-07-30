@@ -262,13 +262,26 @@ exactly one visible, usable search entry point on the page — Disc's own.
    it, adding the delta on top of the normal `safe-area-inset-bottom`
    offset. `focusout` is a fallback resync, since `visualViewport`'s
    resize event doesn't always fire on iPad after the keyboard closes.
-9. Sizing is meant to hold up across the full device range (phone
-   portrait/landscape, tablet, desktop) without a device-specific branch.
-   Verify any future CSS change against at least a narrow phone
-   (~320–390px), a **short landscape phone (~390px tall)**, and a wide
-   desktop viewport — it's cheap with Playwright and easy to silently
-   break one while fixing another. The landscape case has already caught
-   two real bugs.
+9. Sizing holds up across the full device range without device-specific
+   branches. `devices_test.js` runs the whole flow — idle, results,
+   detail, look expanded — against 14 real profiles (iPhone SE/12/14 Pro
+   Max, Pixel 7, Galaxy S9+, iPad Mini/Pro 11 both orientations, plus
+   320px, laptop, 1440 and 1920) and asserts the bar and buy card stay
+   inside the viewport, Add to cart stays reachable, the page never
+   scrolls horizontally, and no JS errors fire. Run it after any CSS
+   change; the short-landscape and narrow-phone cases have caught several
+   real bugs.
+   The results grid uses `minmax(min(240px, 46%), 1fr)`, which gives two
+   products per row on a phone and scales to 3 / 4 / 5 / 7 columns on
+   tablet through 1920px, rather than one oversized column on mobile.
+
+   **A missing `<meta name="viewport">` on the host page breaks this
+   entirely** — a mobile browser then lays out at 980px and scales down,
+   so Disc renders at desktop widths on a phone. Every real Shopify theme
+   ships the tag; `test.html` was missing it, which is what the device
+   matrix caught. Disc deliberately does not inject one: that would mutate
+   the merchant's page, and a storefront without it is already broken for
+   its own layout, not just ours.
 10. `detectShop()` reads `window.Shopify.shop` (a global every Shopify
     storefront injects) and sends it with every call — this is what makes
     multi-tenancy zero-config for the merchant; there's nothing to paste
