@@ -1399,16 +1399,6 @@
     .disc-chips, .disc-buy { flex-shrink: 0; }
     .disc-chip-panel { min-height: 0; overflow-y: auto; scrollbar-width: none; }
     .disc-chip-panel::-webkit-scrollbar { display: none; }
-    /* Only the secondary surfaces scroll. The buy card is flex-shrink:0 and
-       sits outside this box, so a short viewport (a phone in landscape) can
-       never push Add to cart out of reach — it clips the chips instead. */
-    .disc-detail-secondary {
-      display: flex; flex-direction: column; align-items: center; gap: 10px;
-      min-height: 0; overflow-y: auto; overscroll-behavior: contain;
-      scrollbar-width: none;
-    }
-    .disc-detail-secondary::-webkit-scrollbar { display: none; }
-    .disc-buy { flex-shrink: 0; }
     /* Detail imagery needs to clear both the bar and the pinned card. */
     /* Detail imagery fills the canvas; it scrolls sideways, not down. */
     .disc-body--detail { padding-bottom: 0; overflow-y: hidden; }
@@ -1636,10 +1626,23 @@
       .disc-buy-close { width: 36px; height: 36px; }
     }
 
+    /* Short viewports (a phone in landscape) leave the expandable panel
+       roughly 130px between the chips and the buy card. A 2-column grid of
+       image cards needs ~290px there, so its second row and the pagination
+       arrows end up scrolled out of a scrollbar-less container — reachable
+       in theory, invisible in practice. One shallow row of four instead
+       puts a whole page, its arrows and its dots on screen at once. Keep
+       the row height in dvh so it tracks the viewport rather than
+       re-clipping the next time this panel gains a few px. */
     @media (max-height: 520px) {
       .disc-overlay { bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
       .disc-buy-thumb { width: 44px; height: 54px; }
-      .disc-look-card { aspect-ratio: 3 / 2; }
+      .disc-chip-panel--look { padding: 10px; }
+      .disc-look-grid { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+      .disc-look-card { aspect-ratio: auto; height: clamp(44px, 17dvh, 92px); }
+      .disc-look-nav { padding: 8px 4px 0; }
+      .disc-look-arrow { width: 30px; height: 30px; }
+      .disc-look-arrow svg { width: 13px; height: 13px; }
       .disc-round { width: 44px; height: 44px; }
       .disc-tools { height: 44px; }
     }

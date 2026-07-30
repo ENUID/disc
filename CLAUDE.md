@@ -275,6 +275,30 @@ exactly one visible, usable search entry point on the page — Disc's own.
    products per row on a phone and scales to 3 / 4 / 5 / 7 columns on
    tablet through 1920px, rather than one oversized column on mobile.
 
+   `coverage_test.js` is the companion check and asks a different
+   question: not "does it fit" but "can the shopper actually see and hit
+   it". At every stage (idle, results, detail, sizes revealed, look
+   expanded) it uses `shadowRoot.elementFromPoint()` on each control's own
+   centre to prove nothing is stacked on top of it, flags text clipped
+   without an `ellipsis` rule, flags overlapping sibling blocks in
+   `.disc-detail-ui`, and scrolls the results to the bottom to confirm the
+   last product row isn't parked under the bar. **A container that
+   scrolls is not the same as content that is visible** — that distinction
+   is what it exists to catch, and CSS that merely "fits" can still fail
+   it.
+
+   The one thing that has failed it: on a short landscape phone the
+   expandable panel only gets ~130px between the chips and the buy card,
+   so the complete-the-look 2×2 image grid (~290px) pushed its second row
+   and its pagination arrows into the panel's own hidden-scrollbar
+   overflow — reachable in theory, invisible in practice. Under
+   `@media (max-height: 520px)` the grid becomes one shallow row of four
+   (`repeat(4, 1fr)`, `aspect-ratio: auto`, `height: clamp(44px, 17dvh,
+   92px)`) with a compressed nav, so a whole page plus its arrows and dots
+   is on screen at once. The row height is in `dvh` rather than a fixed
+   px so it tracks the viewport instead of needing re-tuning the next time
+   the panel gains a few px.
+
    **A missing `<meta name="viewport">` on the host page breaks this
    entirely** — a mobile browser then lays out at 980px and scales down,
    so Disc renders at desktop widths on a phone. Every real Shopify theme
@@ -320,19 +344,17 @@ exactly one visible, usable search entry point on the page — Disc's own.
     `centre_test.js` asserts each one is within 2px of centre at phone,
     tablet and both desktop widths. Note this is a **deliberate
     divergence from the reference**, which left-aligns the detail column;
-    it was requested. Flipping `.disc-detail-ui`/`.disc-detail-secondary`
-    back to `align-items: flex-start` restores the reference layout.
+    it was requested. Flipping `.disc-detail-ui` back to
+    `align-items: flex-start` restores the reference layout.
 15. **The detail view's glass card lives in `.disc-overlay`, outside the
     scrolling `.disc-body`.** This is deliberate and load-bearing: sticky
     positioning can't keep it pinned, because a sticky element stops as
     soon as its own parent's content ends — that bug left the card
-    floating mid-page. Within the overlay only `.disc-detail-secondary`
-    (chips, panels, look tray) scrolls; `.disc-buy` is `flex-shrink: 0`,
+    floating mid-page. Within the overlay `.disc-chip-panel` is the only
+    flexible child; `.disc-chips` and `.disc-buy` are `flex-shrink: 0`,
     so on a short viewport the panel clips rather than Add-to-cart being
     pushed out of reach. That was a real bug found on a 390px-tall
     landscape phone, where the purchase card was completely unreachable.
-    Only `.disc-chip-panel` is the flexible child; `.disc-chips` and
-    `.disc-buy` are `flex-shrink: 0`.
 16. `[hidden] { display: none !important; }` is required — without it the
     attribute is a no-op on anything given an explicit `display` value,
     which is why the Back button once appeared on the results view.
