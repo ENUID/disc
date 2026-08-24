@@ -2,7 +2,11 @@ import { cronJobs } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
-import { EVENT_RETENTION_DAYS, RESYNC_INTERVAL_HOURS } from "./lib/env";
+import {
+  EVENT_RETENTION_DAYS,
+  RESYNC_INTERVAL_HOURS,
+  SHOPPER_SESSION_RETENTION_DAYS,
+} from "./lib/env";
 
 /**
  * Scheduled work.
@@ -100,6 +104,27 @@ export const purgeExpired = internalAction({
   handler: async (ctx) => {
     await ctx.runMutation(internal.auth.purgeExpiredSessions, {});
     await ctx.runMutation(internal.auth.purgeExpiredOAuthStates, {});
+
+    // Rate-limit windows. One row per tenant per rule, so this stays
+    // small — but a row is written for every tenant that ever searched,
+    // and nothing else ever deletes them.
+    for (let i = 0; i < 10; i++) {
+      const purged: number = await ctx.runMutation(internal.billing.purgeRateLimits, {});
+      if (purged < 500) break;
+    }
+
+    // Shopper sessions (spec §92). Shortest retention of anything here:
+    // this is the one record holding what a shopper *said* they wanted
+    // rather than what they clicked.
+    const sessionCutoff =
+      Date.now() - SHOPPER_SESSION_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 10; i++) {
+      const deleted: number = await ctx.runMutation(internal.session.purgeStaleSessions, {
+        olderThan: sessionCutoff,
+        limit: 1000,
+      });
+      if (deleted < 1000) break;
+    }
 
     // Event retention (spec §92). Events are shopper behaviour and are
     // aged out; recommendation traces are kept, because they are what

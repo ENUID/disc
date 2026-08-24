@@ -45,6 +45,16 @@ export const DASHBOARD_URL = () => env("DASHBOARD_URL").replace(/\/$/, "");
 export const ENCRYPTION_KEY = () => env("DISC_ENCRYPTION_KEY");
 
 /**
+ * Stripe webhook signing secret.
+ *
+ * Separate from the API key on purpose: without this the webhook route
+ * refuses every event rather than trusting unverified ones, because an
+ * unverified event is a way for anyone who can reach the URL to grant
+ * themselves a subscription.
+ */
+export const STRIPE_WEBHOOK_SECRET = () => env("STRIPE_WEBHOOK_SECRET");
+
+/**
  * Shopify Admin API version.
  *
  * Pinned deliberately: Shopify ships quarterly versions and an unpinned
@@ -69,3 +79,14 @@ export const OAUTH_STATE_TTL_MS = 1000 * 60 * 10;
  * explainable, and they contain no shopper identity.
  */
 export const EVENT_RETENTION_DAYS = Number(env("DISC_EVENT_RETENTION_DAYS") || "180");
+
+/**
+ * How long an idle shopper session is kept (spec §92).
+ *
+ * Much shorter than event retention, because this is the one record that
+ * holds what a shopper said they wanted rather than what they did. A
+ * session that outlives the shopping trip is data held for no reason.
+ */
+export const SHOPPER_SESSION_RETENTION_DAYS = Number(
+  env("DISC_SESSION_RETENTION_DAYS") || "30",
+);

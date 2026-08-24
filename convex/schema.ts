@@ -116,6 +116,19 @@ export default defineSchema({
     .index("by_tenant", ["tenantId"]),
 
   /**
+   * Rate-limit counters (spec §90).
+   *
+   * One row per tenant per rule, holding a fixed window. A sliding
+   * window would need a write per request on the very path whose point
+   * is to be cheap.
+   */
+  rateLimits: defineTable({
+    key: v.string(), // "<rule>:<tenantId>"
+    windowStart: v.number(),
+    count: v.number(),
+  }).index("by_key", ["key"]),
+
+  /**
    * OAuth CSRF state. A table rather than the prototype's in-process
    * dict: that dict was never bounded (abandoned installs accumulated
    * for the process lifetime) and it broke outright with more than one

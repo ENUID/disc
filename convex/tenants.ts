@@ -200,9 +200,43 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // Inferred attributes. Derived from the merchant's catalog, so they
+    // are the merchant's data too — leaving them behind would mean
+    // `shop/redact` deleted the source and kept what was inferred from
+    // it, which is the opposite of what the topic promises.
+    for (;;) {
+      const batch = await ctx.db
+        .query("productProfiles")
+        .withIndex("by_tenant_and_product", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
+    for (;;) {
+      const batch = await ctx.db
+        .query("brandBrains")
+        .withIndex("by_tenant_version", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     for (;;) {
       const batch = await ctx.db
         .query("events")
+        .withIndex("by_tenant_and_at", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
+    // Traces are kept for as long as the tenant exists, because they are
+    // what makes a past recommendation explainable — but not past the
+    // tenant. Once the shop is redacted there is nothing left to explain.
+    for (;;) {
+      const batch = await ctx.db
+        .query("recommendationTraces")
         .withIndex("by_tenant_and_at", (q) => q.eq("tenantId", tenantId))
         .take(500);
       if (batch.length === 0) break;

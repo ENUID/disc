@@ -5,8 +5,10 @@ import {
   randomToken,
   verifyShopifyOAuthHmac,
   verifyShopifyWebhookHmac,
+  verifyStripeSignature,
 } from "./lib/crypto";
 import { encryptSecret } from "./lib/crypto";
+import { interpretStripeEvent } from "./lib/billing";
 import {
   DASHBOARD_URL,
   ENCRYPTION_KEY,
@@ -15,6 +17,7 @@ import {
   SHOPIFY_API_KEY,
   SHOPIFY_API_SECRET,
   SHOPIFY_SCOPES,
+  STRIPE_WEBHOOK_SECRET,
 } from "./lib/env";
 import {
   exchangeCodeUrl,
@@ -54,11 +57,53 @@ function json(body: unknown, status = 200, extraHeaders: Record<string, string> 
 
 const preflight = httpAction(async () => new Response(null, { status: 204, headers: CORS_HEADERS }));
 
+/**
+ * Register the CORS preflight for a path, at most once.
+ *
+ * Idempotent on purpose. Convex's router throws on a duplicate
+ * path/method at import time, and a path with both a GET and a POST
+ * naturally wants its OPTIONS declared next to each — which is a
+ * deploy-time crash the type checker cannot see. Two of these had
+ * already accumulated before `http.itest.ts` was written.
+ */
+const preflightPaths = new Set<string>();
+function allowPreflight(path: string) {
+  if (preflightPaths.has(path)) return;
+  preflightPaths.add(path);
+  http.route({ path, method: "OPTIONS", handler: preflight });
+}
+
 // ---------------------------------------------------------------------
 // Storefront API — public key only, read-only, that shop's own catalog.
 // ---------------------------------------------------------------------
 
-http.route({ path: "/search", method: "OPTIONS", handler: preflight });
+/**
+ * Rate limiting (spec §90).
+ *
+ * Keyed on the public key rather than an IP: shoppers share NATs and
+ * mobile carriers, so per-IP limits punish real customers, and the
+ * tenant is the party whose costs this protects.
+ *
+ * Returns null when the request may proceed, or a 429 when it may not.
+ */
+async function rateLimited(
+  ctx: MerchantCtx,
+  rule: string,
+  identifier: string,
+): Promise<Response | null> {
+  if (!identifier) return null;
+  const decision = await ctx.runMutation(internal.billing.consumeRateLimit, {
+    rule,
+    tenantId: identifier,
+  });
+  if (decision.allowed) return null;
+
+  return json({ detail: "Too many requests", status: "rate_limited" }, 429, {
+    "Retry-After": String(decision.retryAfterSeconds),
+  });
+}
+
+allowPreflight("/search");
 http.route({
   path: "/search",
   method: "POST",
@@ -66,6 +111,9 @@ http.route({
     const body = await request.json().catch(() => ({}));
     const publicKey = body.site_key ?? body.publicKey ?? "";
     if (!publicKey) return json({ query: "", results: [], status: "unknown" });
+
+    const limited = await rateLimited(ctx as MerchantCtx, "search", publicKey);
+    if (limited) return limited;
 
     const result = await ctx.runAction(api.search.search, {
       publicKey,
@@ -76,7 +124,7 @@ http.route({
   }),
 });
 
-http.route({ path: "/product", method: "OPTIONS", handler: preflight });
+allowPreflight("/product");
 http.route({
   pathPrefix: "/product/",
   method: "GET",
@@ -121,7 +169,7 @@ http.route({
  * which is a different shape. Keeping both means the widget can adopt it
  * when its UI is ready, without a flag day.
  */
-http.route({ path: "/outfit", method: "OPTIONS", handler: preflight });
+allowPreflight("/outfit");
 http.route({
   path: "/outfit",
   method: "POST",
@@ -129,6 +177,10 @@ http.route({
     const body = await request.json().catch(() => ({}));
     const publicKey = body.site_key ?? body.publicKey ?? "";
     if (!publicKey) return json({ outfits: [], status: "unknown" });
+
+    // Tighter than /search: this path can reach a model.
+    const limited = await rateLimited(ctx as MerchantCtx, "outfit", publicKey);
+    if (limited) return limited;
 
     const result = await ctx.runAction(api.outfits.buildLook, {
       publicKey,
@@ -149,7 +201,7 @@ http.route({
  * lapsed, unknown or not-yet-activated tenant never costs a storefront
  * its own search box.
  */
-http.route({ path: "/storefront/config", method: "OPTIONS", handler: preflight });
+allowPreflight("/storefront/config");
 http.route({
   path: "/storefront/config",
   method: "GET",
@@ -230,7 +282,7 @@ http.route({
  * know, and a failing beacon must not surface as a console error on a
  * merchant's shop.
  */
-http.route({ path: "/events", method: "OPTIONS", handler: preflight });
+allowPreflight("/events");
 http.route({
   path: "/events",
   method: "POST",
@@ -476,7 +528,7 @@ async function requireMerchant(ctx: any, request: Request) {
   return await ctx.runQuery(internal.auth.tenantForToken, { token });
 }
 
-http.route({ path: "/merchant/overview", method: "OPTIONS", handler: preflight });
+allowPreflight("/merchant/overview");
 http.route({
   path: "/merchant/overview",
   method: "GET",
@@ -502,30 +554,19 @@ http.route({
   }),
 });
 
-http.route({ path: "/merchant/analytics", method: "OPTIONS", handler: preflight });
-http.route({
-  path: "/merchant/analytics",
-  method: "GET",
-  handler: httpAction(async (ctx, request) => {
-    const tenantId = await requireMerchant(ctx, request);
-    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
-
-    const url = new URL(request.url);
-    const days = Math.min(Number(url.searchParams.get("days") ?? "30") || 30, 365);
-    const since = Date.now() - days * 24 * 60 * 60 * 1000;
-
-    const metrics = await ctx.runQuery(internal.analytics.overview, { tenantId, since });
-    return json({ days, ...metrics });
-  }),
-});
-
-http.route({ path: "/merchant/resync", method: "OPTIONS", handler: preflight });
+allowPreflight("/merchant/resync");
 http.route({
   path: "/merchant/resync",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const tenantId = await requireMerchant(ctx, request);
     if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    // Tightest of the three rules. A full catalog re-read is minutes of
+    // work and a whole catalog's worth of embedding spend; nothing
+    // legitimate needs it more than a few times an hour.
+    const limited = await rateLimited(ctx as MerchantCtx, "resync", String(tenantId));
+    if (limited) return limited;
 
     await ctx.scheduler.runAfter(0, internal.ingest.syncCatalog, { tenantId });
     return json({ status: "queued" });
@@ -544,7 +585,7 @@ function merchantRoute(
   path: string,
   handler: (ctx: MerchantCtx, tenantId: unknown, request: Request) => Promise<unknown>,
 ) {
-  http.route({ path, method: "OPTIONS", handler: preflight });
+  allowPreflight(path);
   http.route({
     path,
     method: "GET",
@@ -589,14 +630,18 @@ merchantRoute("/merchant/settings", async (ctx, tenantId) =>
 );
 
 merchantRoute("/merchant/analytics", async (ctx, tenantId, request) => {
-  const days = Number(new URL(request.url).searchParams.get("days") ?? "30");
-  return await ctx.runQuery(internal.analytics.overview, {
+  const requested = Number(new URL(request.url).searchParams.get("days") ?? "30");
+  // Clamped, and the clamped value is echoed back: a dashboard asking
+  // for 365 days must not label 90 days of data as a year.
+  const days = Math.min(Math.max(Number.isFinite(requested) ? requested : 30, 1), 90);
+  const metrics = await ctx.runQuery(internal.analytics.overview, {
     tenantId,
-    since: Date.now() - Math.min(Math.max(days, 1), 90) * 86400_000,
+    since: Date.now() - days * 86400_000,
   });
+  return { days, ...metrics };
 });
 
-http.route({ path: "/merchant/experience", method: "OPTIONS", handler: preflight });
+allowPreflight("/merchant/experience");
 http.route({
   path: "/merchant/experience",
   method: "POST",
@@ -620,7 +665,7 @@ http.route({
  * one, so past recommendations continue to resolve against the version
  * that actually produced them.
  */
-http.route({ path: "/merchant/brand/correct", method: "OPTIONS", handler: preflight });
+allowPreflight("/merchant/brand/correct");
 http.route({
   path: "/merchant/brand/correct",
   method: "POST",
@@ -644,7 +689,113 @@ http.route({
   }),
 });
 
-http.route({ path: "/merchant/preview", method: "OPTIONS", handler: preflight });
+// ---------------------------------------------------------------------
+// Billing (spec §76, §133).
+// ---------------------------------------------------------------------
+
+merchantRoute("/merchant/billing", async (ctx, tenantId) => {
+  const [plans, state] = await Promise.all([
+    ctx.runQuery(internal.billing.plans, {}),
+    ctx.runQuery(internal.billing.billingState, { tenantId }),
+  ]);
+  return { ...plans, state };
+});
+
+allowPreflight("/merchant/billing/checkout");
+http.route({
+  path: "/merchant/billing/checkout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const dashboard = DASHBOARD_URL() || PUBLIC_URL();
+    const result = await ctx.runAction(internal.billing.startCheckout, {
+      tenantId,
+      plan: typeof body.plan === "string" ? body.plan : undefined,
+      // Return urls are derived here, not taken from the request body: an
+      // attacker-supplied success_url would turn Stripe's redirect into
+      // an open redirect carrying the merchant's session.
+      successUrl: `${dashboard}/app/billing?checkout=success`,
+      cancelUrl: `${dashboard}/app/billing?checkout=cancelled`,
+    });
+    return json(result, "error" in result ? 400 : 200);
+  }),
+});
+
+allowPreflight("/merchant/billing/portal");
+http.route({
+  path: "/merchant/billing/portal",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const dashboard = DASHBOARD_URL() || PUBLIC_URL();
+    const result = await ctx.runAction(internal.billing.openPortal, {
+      tenantId,
+      returnUrl: `${dashboard}/app/billing`,
+    });
+    return json(result, "error" in result ? 400 : 200);
+  }),
+});
+
+/**
+ * Stripe webhooks.
+ *
+ * This is the load-bearing half of billing, not the checkout call:
+ * `/search` reads the cached subscription status rather than asking
+ * Stripe per query, so a cancellation only takes effect when this route
+ * records it. Without it a cancelled merchant keeps the product forever
+ * and a failed payment is never noticed.
+ *
+ * Raw body, verify, THEN parse — same order as the Shopify webhooks, and
+ * for the same reason.
+ */
+http.route({
+  path: "/webhooks/stripe",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const raw = await request.text();
+    const signature = request.headers.get("Stripe-Signature");
+
+    const secret = STRIPE_WEBHOOK_SECRET();
+    if (!secret) {
+      // Refuse rather than trust. Accepting unverified events would let
+      // anyone who can reach this URL grant themselves a subscription.
+      return new Response("Webhook secret not configured", { status: 503 });
+    }
+    if (!(await verifyStripeSignature(raw, signature, secret))) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+
+    let event: unknown;
+    try {
+      event = JSON.parse(raw);
+    } catch {
+      return new Response("Malformed body", { status: 400 });
+    }
+
+    const outcome = interpretStripeEvent(event);
+    // 200 on an event we don't act on: Stripe retries non-2xx, and
+    // retrying an event we deliberately ignore never succeeds.
+    if (!outcome.handled || !outcome.tenantId) {
+      return new Response("OK", { status: 200 });
+    }
+
+    await ctx.runMutation(internal.billing.applyStripeEvent, {
+      tenantId: outcome.tenantId,
+      subscriptionStatus: outcome.subscriptionStatus,
+      plan: outcome.plan ?? undefined,
+      customerId: outcome.customerId ?? undefined,
+      subscriptionId: outcome.subscriptionId ?? undefined,
+    });
+    return new Response("OK", { status: 200 });
+  }),
+});
+
+allowPreflight("/merchant/preview");
 http.route({
   path: "/merchant/preview",
   method: "POST",
