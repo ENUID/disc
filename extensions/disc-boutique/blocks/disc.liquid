@@ -1,0 +1,78 @@
+{% comment %}
+  Disc — app embed block.
+
+  Target is `body`, per Shopify's guidance for "apps that provide a
+  floating or overlaid component to a page". Disc is exactly that: a
+  docked bar that opens a full-screen canvas.
+
+  Three things this block does that a pasted script tag could not:
+
+  1. It carries the tenant's public key without the merchant typing
+     anything. `shop.permanent_domain` identifies the store, and Disc
+     resolves it server-side — there is no key for them to paste wrong.
+
+  2. It gives Disc safe page context (spec §42). "Style this" on a
+     product page should not require the shopper to explain which
+     product; the theme already knows, so it is passed in rather than
+     guessed at.
+
+  3. It defers. The script never blocks rendering (spec §94), and if
+     Disc is unreachable the storefront is untouched — spec §14 is
+     explicit that Disc must never become a single point of failure for
+     a merchant's store.
+
+  App embeds start deactivated. The merchant turns Disc on in the theme
+  editor, which is what makes installing the app safe: it cannot change
+  what shoppers see until they say so.
+{% endcomment %}
+
+<script>
+  window.DiscConfig = Object.assign({}, window.DiscConfig, {
+    apiUrl: {{ block.settings.api_url | default: 'https://disc.convex.site' | json }},
+    shopDomain: {{ shop.permanent_domain | json }},
+
+    {%- comment -%}
+      Page context (spec §42). Only ids and a page type — nothing about
+      the shopper, and nothing that is not already in the page's own
+      markup.
+    {%- endcomment -%}
+    page: {
+      type: {{ request.page_type | json }},
+      {%- if product %}
+      productId: {{ product.id | json }},
+      productHandle: {{ product.handle | json }},
+      {%- endif %}
+      {%- if collection %}
+      collectionId: {{ collection.id | json }},
+      {%- endif %}
+    },
+
+    {%- comment -%}
+      The merchant's own currency and locale, so prices and copy are not
+      guessed. The prototype never carried currency at all, and every
+      non-USD store rendered dollar signs.
+    {%- endcomment -%}
+    currency: {{ cart.currency.iso_code | json }},
+    locale: {{ request.locale.iso_code | json }},
+  });
+</script>
+
+<script
+  src="{{ 'disc-widget.js' | asset_url }}"
+  defer></script>
+
+{% schema %}
+{
+  "name": "Disc AI Boutique",
+  "target": "body",
+  "settings": [
+    {
+      "type": "text",
+      "id": "api_url",
+      "label": "Disc backend URL",
+      "info": "Leave as-is unless Disc support asks you to change it.",
+      "default": "https://disc.convex.site"
+    }
+  ]
+}
+{% endschema %}

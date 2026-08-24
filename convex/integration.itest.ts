@@ -573,15 +573,33 @@ describe("storefront config", () => {
     const config = await t.query(publicApi().tenants.storefrontConfig, {
       publicKey: "disc_acme",
     });
-    // Readable by anyone who views a storefront's HTML, so it must not
-    // carry plan, subscription vocabulary, product count or email.
+    // Readable by anyone, so this list is a security boundary rather
+    // than a convenience. Every field here is already visible in the
+    // shop's own page source once Disc is live:
+    //   publicKey    ships in the storefront HTML by design
+    //   brandTokens  are rendered on screen
+    //   widgetConfig is the greeting and design tokens, also rendered
+    //   catalog/widget status decide whether the widget mounts at all
+    // Adding anything else to storefrontStatus should fail this test and
+    // require justifying the exposure.
     expect(config).not.toBeNull();
     expect(Object.keys(config!).sort()).toEqual([
       "active",
       "brandTokens",
       "catalogStatus",
+      "publicKey",
+      "widgetConfig",
       "widgetStatus",
     ]);
+
+    // What must never appear, stated positively so the intent survives
+    // a future refactor of the field list above.
+    const serialised = JSON.stringify(config);
+    expect(serialised).not.toContain("merchant@");
+    expect(serialised).not.toContain("cipher");
+    expect(config).not.toHaveProperty("plan");
+    expect(config).not.toHaveProperty("subscriptionStatus");
+    expect(config).not.toHaveProperty("productCount");
   });
 });
 

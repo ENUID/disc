@@ -64,12 +64,22 @@ export function isActive(tenant: Tenant, billingEnabled: boolean): boolean {
   return tenant.subscriptionStatus === "active" || tenant.subscriptionStatus === "trialing";
 }
 
-/** What a storefront request is allowed to know. Deliberately small. */
+/**
+ * What a storefront request is allowed to know. Deliberately small.
+ *
+ * Everything here is already visible to anyone who views the shop's
+ * page source, so exposing it costs nothing: the public key ships in the
+ * HTML, and the brand tokens and greeting are rendered on screen. What
+ * is absent is the point — no plan, no subscription vocabulary, no
+ * product count, no email, no credentials.
+ */
 export type StorefrontStatus = {
+  publicKey: string;
   active: boolean;
   catalogStatus: Tenant["catalogStatus"];
   widgetStatus: Tenant["widgetStatus"];
   brandTokens: unknown;
+  widgetConfig: unknown;
 };
 
 export function storefrontStatus(
@@ -77,10 +87,12 @@ export function storefrontStatus(
   billingEnabled: boolean,
 ): StorefrontStatus {
   return {
+    publicKey: tenant.publicKey,
     active: isActive(tenant, billingEnabled),
     catalogStatus: tenant.catalogStatus,
     widgetStatus: tenant.widgetStatus,
     brandTokens: tenant.brandTokens ?? null,
+    widgetConfig: tenant.widgetConfig ?? null,
   };
 }
 

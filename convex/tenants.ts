@@ -45,6 +45,27 @@ export const storefrontConfig = query({
   },
 });
 
+/**
+ * Storefront config resolved by shop domain.
+ *
+ * This is what lets the theme app extension carry no key at all. Shopify
+ * gives the theme `shop.permanent_domain`; Disc maps that to the tenant
+ * and hands back the public key the widget then uses for everything
+ * else. Nothing for a merchant to paste, and nothing they can paste
+ * wrong.
+ *
+ * Safe to serve to anyone: every field here is already visible in the
+ * shop's own page source once Disc is live.
+ */
+export const storefrontConfigByDomain = query({
+  args: { shopDomain: v.string() },
+  handler: async (ctx, { shopDomain }) => {
+    const tenant = await tenantByShopDomain(ctx, shopDomain);
+    if (!tenant) return null;
+    return storefrontStatus(tenant, billingEnabled());
+  },
+});
+
 export const createOrUpdateFromInstall = internalMutation({
   args: {
     shopDomain: v.string(),

@@ -1,3 +1,5 @@
+/* Generated from frontend/disc-widget.js — do not edit here.
+   Regenerate with: node scripts/sync-extension-asset.mjs */
 /**
  * Disc — AI Boutique Widget
  * https://enuidlabs.com/disc

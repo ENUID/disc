@@ -142,8 +142,52 @@ http.route({
 });
 
 /**
- * Boot check. The widget calls this before hiding anything, so a lapsed
- * or unknown tenant never costs a storefront its own search box.
+ * Boot config, resolved by shop domain.
+ *
+ * The theme app extension knows the shop but carries no key; this is
+ * where it gets one. The widget calls this before hiding anything, so a
+ * lapsed, unknown or not-yet-activated tenant never costs a storefront
+ * its own search box.
+ */
+http.route({ path: "/storefront/config", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/storefront/config",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const shopDomain = new URL(request.url).searchParams.get("shop") ?? "";
+    const config = shopDomain
+      ? await ctx.runQuery(api.tenants.storefrontConfigByDomain, { shopDomain })
+      : null;
+
+    // An unknown shop resolves as inactive rather than 404: the widget
+    // reads this as "stay dormant", which is the safe direction. A store
+    // that has not finished installing must not lose its own search box.
+    if (!config) {
+      return json({ active: false, catalog_status: "unknown" }, 200, {
+        "Cache-Control": "public, max-age=60",
+      });
+    }
+
+    return json(
+      {
+        public_key: config.publicKey,
+        active: config.active,
+        catalog_status: config.catalogStatus,
+        widget_status: config.widgetStatus,
+        brand_tokens: config.brandTokens,
+        widget_config: config.widgetConfig,
+      },
+      200,
+      // Short enough that activating Disc shows up promptly, long enough
+      // that a busy storefront is not re-asking on every page view.
+      { "Cache-Control": "public, max-age=300" },
+    );
+  }),
+});
+
+/**
+ * Boot check by public key. Kept alongside the domain route so an
+ * install that already carries a key keeps working.
  */
 http.route({
   pathPrefix: "/sites/",
