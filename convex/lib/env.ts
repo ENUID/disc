@@ -61,3 +61,11 @@ export const MERCHANT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 
 /** OAuth state lifetime. Short — an install completes in seconds. */
 export const OAUTH_STATE_TTL_MS = 1000 * 60 * 10;
+
+/**
+ * How long shopper events are kept (spec §92 requires a documented
+ * retention period). Recommendation traces are deliberately NOT aged out
+ * on this schedule — they are what makes a past recommendation
+ * explainable, and they contain no shopper identity.
+ */
+export const EVENT_RETENTION_DAYS = Number(env("DISC_EVENT_RETENTION_DAYS") || "180");

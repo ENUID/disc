@@ -140,6 +140,62 @@ http.route({
   }),
 });
 
+/**
+ * Storefront event reporting (spec §80).
+ *
+ * Public by necessity — the widget runs on the merchant's own page, so
+ * there is no credential it could hold that a shopper could not read.
+ * Two consequences are handled rather than assumed away:
+ *
+ *   - only the safe subset of event types is accepted, so a forged
+ *     request cannot write `purchase` and inflate a merchant's revenue
+ *   - the payload is bounded, so one request cannot write an arbitrarily
+ *     large document
+ *
+ * Always answers 204, even for a rejected event. A storefront must never
+ * see an error from analytics; the shopper is not the one who needs to
+ * know, and a failing beacon must not surface as a console error on a
+ * merchant's shop.
+ */
+http.route({ path: "/events", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/events",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const noContent = new Response(null, { status: 204, headers: CORS_HEADERS });
+    try {
+      const body = await request.json();
+      const publicKey = body.site_key ?? body.publicKey;
+      if (!publicKey) return noContent;
+
+      const tenant = await ctx.runQuery(internal.search.resolveStorefront, { publicKey });
+      if (!tenant) return noContent;
+
+      // A batch, so the widget can flush several events in one beacon
+      // rather than one request per interaction.
+      const events = Array.isArray(body.events) ? body.events.slice(0, 20) : [];
+      for (const event of events) {
+        await ctx.runMutation(internal.analytics.recordEvent, {
+          tenantId: tenant.tenantId,
+          type: String(event?.type ?? ""),
+          sessionKey: event?.session_key ? String(event.session_key) : undefined,
+          recommendationId: event?.recommendation_id
+            ? String(event.recommendation_id)
+            : undefined,
+          productIds: Array.isArray(event?.product_ids)
+            ? event.product_ids.map((id: unknown) => String(id))
+            : undefined,
+          payload: event?.payload,
+          fromClient: true,
+        });
+      }
+    } catch {
+      // Malformed body. Nothing to report to a storefront.
+    }
+    return noContent;
+  }),
+});
+
 // ---------------------------------------------------------------------
 // Shopify OAuth (custom distribution).
 // ---------------------------------------------------------------------
@@ -370,6 +426,23 @@ http.route({
       plan: tenant.plan ?? null,
       catalog_error: tenant.catalogError ?? null,
     });
+  }),
+});
+
+http.route({ path: "/merchant/analytics", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/merchant/analytics",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const url = new URL(request.url);
+    const days = Math.min(Number(url.searchParams.get("days") ?? "30") || 30, 365);
+    const since = Date.now() - days * 24 * 60 * 60 * 1000;
+
+    const metrics = await ctx.runQuery(internal.analytics.overview, { tenantId, since });
+    return json({ days, ...metrics });
   }),
 });
 

@@ -2,7 +2,7 @@ import { cronJobs } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
-import { RESYNC_INTERVAL_HOURS } from "./lib/env";
+import { EVENT_RETENTION_DAYS, RESYNC_INTERVAL_HOURS } from "./lib/env";
 
 /**
  * Scheduled work.
@@ -100,6 +100,20 @@ export const purgeExpired = internalAction({
   handler: async (ctx) => {
     await ctx.runMutation(internal.auth.purgeExpiredSessions, {});
     await ctx.runMutation(internal.auth.purgeExpiredOAuthStates, {});
+
+    // Event retention (spec §92). Events are shopper behaviour and are
+    // aged out; recommendation traces are kept, because they are what
+    // makes a past recommendation explainable.
+    const cutoff = Date.now() - EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    // Bounded per run so a large backlog is drained over several nights
+    // rather than in one mutation that exceeds its limits.
+    for (let i = 0; i < 10; i++) {
+      const deleted: number = await ctx.runMutation(internal.analytics.purgeOldEvents, {
+        olderThan: cutoff,
+        limit: 1000,
+      });
+      if (deleted < 1000) break;
+    }
     return null;
   },
 });
