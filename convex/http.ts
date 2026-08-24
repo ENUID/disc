@@ -488,4 +488,128 @@ http.route({
   }),
 });
 
+/**
+ * Dashboard sections (spec §70-§75).
+ *
+ * One GET each, all requiring the merchant token. Registered through a
+ * small helper because the auth check is the only thing that must never
+ * be forgotten on one of them, and repeating it by hand seven times is
+ * how one eventually gets missed.
+ */
+function merchantRoute(
+  path: string,
+  handler: (ctx: MerchantCtx, tenantId: unknown, request: Request) => Promise<unknown>,
+) {
+  http.route({ path, method: "OPTIONS", handler: preflight });
+  http.route({
+    path,
+    method: "GET",
+    handler: httpAction(async (ctx, request) => {
+      const tenantId = await requireMerchant(ctx, request);
+      if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+      return json(await handler(ctx as MerchantCtx, tenantId, request));
+    }),
+  });
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MerchantCtx = any;
+
+merchantRoute("/merchant/dashboard", async (ctx, tenantId) => {
+  // Composed in one request: the dashboard's landing view needs all of
+  // these and a merchant on a slow connection should not watch four
+  // spinners resolve independently.
+  const [overview, catalog, experience, brand] = await Promise.all([
+    ctx.runQuery(internal.merchant.overview, { tenantId }),
+    ctx.runQuery(internal.merchant.catalogHealth, { tenantId }),
+    ctx.runQuery(internal.merchant.experience, { tenantId }),
+    ctx.runQuery(internal.brand.currentBrain, { tenantId }),
+  ]);
+  return { overview, catalog, experience, brand };
+});
+
+merchantRoute("/merchant/catalog", async (ctx, tenantId) =>
+  ctx.runQuery(internal.merchant.catalogHealth, { tenantId }),
+);
+
+merchantRoute("/merchant/brand", async (ctx, tenantId) =>
+  ctx.runQuery(internal.brand.currentBrain, { tenantId }),
+);
+
+merchantRoute("/merchant/experience", async (ctx, tenantId) =>
+  ctx.runQuery(internal.merchant.experience, { tenantId }),
+);
+
+merchantRoute("/merchant/settings", async (ctx, tenantId) =>
+  ctx.runQuery(internal.merchant.settings, { tenantId }),
+);
+
+merchantRoute("/merchant/analytics", async (ctx, tenantId, request) => {
+  const days = Number(new URL(request.url).searchParams.get("days") ?? "30");
+  return await ctx.runQuery(internal.analytics.overview, {
+    tenantId,
+    since: Date.now() - Math.min(Math.max(days, 1), 90) * 86400_000,
+  });
+});
+
+http.route({ path: "/merchant/experience", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/merchant/experience",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const saved = await ctx.runMutation(internal.merchant.saveExperience, {
+      tenantId,
+      config: body,
+    });
+    return json(saved);
+  }),
+});
+
+/**
+ * Brand correction (spec §138).
+ *
+ * Creates a new Brand Brain version rather than mutating the current
+ * one, so past recommendations continue to resolve against the version
+ * that actually produced them.
+ */
+http.route({ path: "/merchant/brand/correct", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/merchant/brand/correct",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    // Only the four correctable facets are forwarded. A merchant cannot
+    // set derivedFrom, confidence or the version number — those describe
+    // how the brain was produced, and letting them be overwritten would
+    // make the trace lie about its own provenance.
+    const version = await ctx.runMutation(internal.brand.applyMerchantCorrection, {
+      tenantId,
+      styleVector: body.styleVector,
+      palette: body.palette,
+      voice: body.voice,
+      summary: typeof body.summary === "string" ? body.summary.slice(0, 400) : undefined,
+    });
+    return json({ version });
+  }),
+});
+
+http.route({ path: "/merchant/preview", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/merchant/preview",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+    await ctx.runMutation(internal.merchant.setPreviewing, { tenantId });
+    return json({ status: "previewing" });
+  }),
+});
+
 export default http;

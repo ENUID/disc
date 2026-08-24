@@ -87,6 +87,11 @@ export default defineSchema({
     // cream/serif identity. This is that missing half.
     brandTokens: v.optional(v.any()),
 
+    // Experience controls (spec §74). Deliberately few: "Keep controls
+    // high-level." A merchant should be correcting Disc, not configuring
+    // fifty variables (§19).
+    widgetConfig: v.optional(v.any()),
+
     email: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
