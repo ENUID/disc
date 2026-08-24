@@ -1,0 +1,63 @@
+/**
+ * Configuration. Every secret is read here and nowhere else, so there is
+ * one place to audit for "does this value ever reach a client".
+ *
+ * Convex environment variables are set with `npx convex env set NAME value`
+ * (or in the dashboard); they are never bundled into client code.
+ */
+
+export function env(name: string): string {
+  return process.env[name] ?? "";
+}
+
+export function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name} is not set. Run: npx convex env set ${name} <value>`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Whether billing is enforced.
+ *
+ * False without a Stripe key, which is what keeps a development
+ * deployment — and the test suite — from being locked out by a
+ * subscription check it cannot satisfy. A deployment that cannot take
+ * money must not refuse service to the merchants it already has.
+ */
+export function billingEnabled(): boolean {
+  return Boolean(env("STRIPE_SECRET_KEY"));
+}
+
+export const SHOPIFY_API_KEY = () => env("SHOPIFY_API_KEY");
+export const SHOPIFY_API_SECRET = () => env("SHOPIFY_API_SECRET");
+export const SHOPIFY_SCOPES = () => env("SHOPIFY_SCOPES") || "read_products";
+
+/** Public origin of this Convex deployment's HTTP router. */
+export const PUBLIC_URL = () => env("PUBLIC_URL").replace(/\/$/, "");
+
+/** Where the merchant dashboard lives (Vercel). */
+export const DASHBOARD_URL = () => env("DASHBOARD_URL").replace(/\/$/, "");
+
+export const ENCRYPTION_KEY = () => env("DISC_ENCRYPTION_KEY");
+
+/**
+ * Shopify Admin API version.
+ *
+ * Pinned deliberately: Shopify ships quarterly versions and an unpinned
+ * client silently changes behaviour under you. Bump this on purpose,
+ * after reading that version's changelog.
+ */
+export const SHOPIFY_API_VERSION = "2025-01";
+
+/** Catalog resync cadence — how stale a merchant's index can get. */
+export const RESYNC_INTERVAL_HOURS = Number(env("DISC_RESYNC_HOURS") || "6");
+
+/** Merchant session lifetime. */
+export const MERCHANT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
+
+/** OAuth state lifetime. Short — an install completes in seconds. */
+export const OAUTH_STATE_TTL_MS = 1000 * 60 * 10;

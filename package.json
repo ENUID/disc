@@ -1,0 +1,35 @@
+{
+  "name": "disc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint convex --ext .ts",
+    "test": "node --experimental-strip-types --test 'convex/**/*.test.ts'",
+    "dev": "convex dev",
+    "deploy": "convex deploy"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ENUID/disc.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ENUID/disc/issues"
+  },
+  "homepage": "https://github.com/ENUID/disc#readme",
+  "dependencies": {
+    "convex": "^1.45.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "eslint": "^10.9.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0"
+  },
+  "private": true,
+  "type": "module"
+}

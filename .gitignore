@@ -9,3 +9,7 @@ venv/
 
 # Editor/OS cruft
 .DS_Store
+
+# Node / Convex
+node_modules/
+.convex/

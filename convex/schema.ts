@@ -1,0 +1,230 @@
+import { defineSchema, defineTable } from "convex/server";
+import { v } from "convex/values";
+
+/**
+ * Disc — Convex data model.
+ *
+ * Three things here are deliberate and load-bearing; the audit
+ * (`Disc audit.md`) explains what went wrong without them.
+ *
+ * 1. TENANCY IS A FIELD, NOT A TABLE NAME. The Python prototype gave
+ *    every shop its own LanceDB table, which made isolation structural
+ *    but also made cross-tenant *queries* impossible and tied us to one
+ *    process with local disk. Here every tenant-owned row carries
+ *    `tenantId`, every index leads with it, and the vector index declares
+ *    it as a filter field. A search that forgets the filter returns
+ *    nothing useful rather than another brand's catalog, and
+ *    `assertTenant` in `lib/tenancy.ts` is the single chokepoint.
+ *
+ * 2. THE TENANT KEY IS NOT THE DOMAIN. The prototype used
+ *    `shop TEXT PRIMARY KEY` — a merchant changing their domain orphaned
+ *    everything they owned. The Convex document id is the identity;
+ *    `shopDomain` and `shopifyShopId` are attributes that may change.
+ *
+ * 3. THE PUBLIC KEY AND THE MERCHANT CREDENTIAL ARE DIFFERENT THINGS.
+ *    `publicKey` ships in storefront HTML and identifies a tenant to the
+ *    widget. It authorises reads of that shop's own catalog and nothing
+ *    else. Anything a merchant does — resync, billing, settings — needs a
+ *    `merchantSessions` token. In the prototype these were the same
+ *    value, which meant anyone who viewed a storefront's source could
+ *    trigger a catalog re-embed or open a Stripe checkout.
+ */
+
+export default defineSchema({
+  tenants: defineTable({
+    // Identity. shopDomain is an attribute, never the key — merchants
+    // change domains and everything they own must survive it.
+    shopDomain: v.string(),
+    shopifyShopId: v.optional(v.string()),
+    installationId: v.optional(v.string()),
+
+    // Public, non-secret. Ships in the storefront's HTML, so it must
+    // never be sufficient for a control-plane action.
+    publicKey: v.string(),
+
+    // Shopify Admin API token, encrypted at rest (see lib/crypto.ts).
+    // Never returned to any client, never logged.
+    accessTokenCipher: v.optional(v.string()),
+    scopes: v.optional(v.string()),
+
+    // How this tenant was connected. "shopify_oauth" is the real path;
+    // "public_catalog" is the legacy self-serve route kept working
+    // during migration.
+    source: v.union(v.literal("shopify_oauth"), v.literal("public_catalog")),
+
+    // Independent lifecycle states — the spec (§18, §71) wants truthful
+    // per-stage progress, which a single status field cannot express.
+    catalogStatus: v.union(
+      v.literal("pending"),
+      v.literal("syncing"),
+      v.literal("ready"),
+      v.literal("error"),
+    ),
+    brandBrainStatus: v.union(
+      v.literal("pending"),
+      v.literal("building"),
+      v.literal("ready"),
+      v.literal("error"),
+    ),
+    widgetStatus: v.union(
+      v.literal("inactive"),
+      v.literal("previewing"),
+      v.literal("live"),
+    ),
+
+    subscriptionStatus: v.string(), // stripe vocabulary: active|trialing|canceled|none
+    plan: v.optional(v.string()),
+    stripeCustomerId: v.optional(v.string()),
+    stripeSubscriptionId: v.optional(v.string()),
+
+    productCount: v.number(),
+    lastSyncedAt: v.optional(v.number()),
+    catalogError: v.optional(v.string()),
+
+    // Brand tokens the widget renders with. The prototype implemented
+    // per-merchant theming in the renderer but had nowhere to store it
+    // and no way to deliver it, so every store got the same hardcoded
+    // cream/serif identity. This is that missing half.
+    brandTokens: v.optional(v.any()),
+
+    email: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_shop_domain", ["shopDomain"])
+    .index("by_public_key", ["publicKey"])
+    .index("by_shopify_shop_id", ["shopifyShopId"]),
+
+  /**
+   * Merchant credentials. Separate from `publicKey` on purpose — this is
+   * the bearer token, it is never rendered into a storefront, and it
+   * expires.
+   */
+  merchantSessions: defineTable({
+    tenantId: v.id("tenants"),
+    tokenHash: v.string(), // sha256 — the raw token is never stored
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    lastUsedAt: v.optional(v.number()),
+  })
+    .index("by_token_hash", ["tokenHash"])
+    .index("by_tenant", ["tenantId"]),
+
+  /**
+   * OAuth CSRF state. A table rather than the prototype's in-process
+   * dict: that dict was never bounded (abandoned installs accumulated
+   * for the process lifetime) and it broke outright with more than one
+   * worker.
+   */
+  oauthStates: defineTable({
+    state: v.string(),
+    shopDomain: v.string(),
+    expiresAt: v.number(),
+  }).index("by_state", ["state"]),
+
+  /**
+   * Canonical product — the SOURCE layer only (spec §26). Model
+   * inference never overwrites anything here; it lives in
+   * productProfiles with its own provenance.
+   */
+  products: defineTable({
+    tenantId: v.id("tenants"),
+    shopifyProductId: v.string(),
+
+    title: v.string(),
+    description: v.string(),
+    handle: v.string(),
+    productType: v.string(),
+    vendor: v.optional(v.string()),
+    tags: v.array(v.string()),
+
+    price: v.number(),
+    // Never ingested by the prototype, so every non-USD merchant showed
+    // dollar prices. Required, not optional, so it cannot be skipped again.
+    currency: v.string(),
+
+    imageUrl: v.string(),
+    images: v.array(v.string()),
+    colour: v.string(),
+
+    variants: v.array(
+      v.object({
+        id: v.string(),
+        title: v.string(),
+        price: v.number(),
+        available: v.boolean(),
+      }),
+    ),
+    // Denormalised so availability can be a *hard filter* at retrieval
+    // time (spec §47). The prototype stored per-variant availability and
+    // then never used it, so sold-out products were recommended freely.
+    anyVariantAvailable: v.boolean(),
+
+    sourceUpdatedAt: v.optional(v.string()),
+    ingestedAt: v.number(),
+  })
+    .index("by_tenant", ["tenantId"])
+    .index("by_tenant_and_shopify_id", ["tenantId", "shopifyProductId"])
+    .index("by_tenant_and_type", ["tenantId", "productType"]),
+
+  /**
+   * Embeddings live beside products rather than inside them: a product
+   * row is rewritten on every catalog change, an embedding only needs
+   * regenerating when the text that produced it changes, and Convex
+   * caps documents at 1 MiB.
+   *
+   * `tenantId` is a filter field on the vector index. That is the whole
+   * cross-tenant isolation guarantee (spec §9, §35) and it is tested.
+   */
+  productEmbeddings: defineTable({
+    tenantId: v.id("tenants"),
+    productId: v.id("products"),
+    embedding: v.array(v.float64()),
+    // What produced this vector, so a model change can invalidate
+    // selectively instead of re-embedding every catalog (spec §117).
+    embeddingModel: v.string(),
+    contentHash: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_tenant_and_product", ["tenantId", "productId"])
+    .index("by_product", ["productId"])
+    .vectorIndex("by_embedding", {
+      vectorField: "embedding",
+      dimensions: 1536,
+      filterFields: ["tenantId"],
+    }),
+
+  /**
+   * Shopper session state (spec §36, §37). Structured state, NOT a
+   * conversation transcript — "make it cheaper" has to be a field
+   * update, not a re-read of chat history.
+   */
+  shopperSessions: defineTable({
+    tenantId: v.id("tenants"),
+    sessionKey: v.string(),
+    state: v.any(), // intent-shaped: occasion, formality, budget, avoid, locked
+    lastSeenAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_tenant_and_key", ["tenantId", "sessionKey"])
+    .index("by_last_seen", ["lastSeenAt"]),
+
+  /**
+   * Analytics events (spec §80). Written from the first request rather
+   * than added later — the audit's point is that traces cannot be
+   * backfilled, so the spine goes in before the decision engine that
+   * will populate it.
+   */
+  events: defineTable({
+    tenantId: v.id("tenants"),
+    sessionKey: v.optional(v.string()),
+    type: v.string(),
+    recommendationId: v.optional(v.string()),
+    productIds: v.optional(v.array(v.string())),
+    payload: v.optional(v.any()),
+    at: v.number(),
+  })
+    .index("by_tenant_and_at", ["tenantId", "at"])
+    .index("by_tenant_and_type", ["tenantId", "type"])
+    .index("by_recommendation", ["recommendationId"]),
+});

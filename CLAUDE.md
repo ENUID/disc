@@ -80,6 +80,57 @@ CSS class prefixes, file names, log lines, comments. Never "Discern",
 "discern-widget", or any other spelling — that was an early working name
 and is wrong everywhere it appears now.
 
+## In-flight migration: Python/LanceDB -> Convex
+
+**Two backends exist in this repo right now. That is deliberate and
+temporary.** `Disc.md` is the target spec; `Disc audit.md` is the traced
+gap analysis; `/convex` is Phase 1 of closing it.
+
+- `/backend` (FastAPI + LanceDB + fastembed) is **still the live one**.
+  Untouched, still passing its 52 checks. Do not delete it.
+- `/convex` is **written but not deployed** — it needs a Convex project,
+  which needs the owner's account. Nothing runs it yet.
+
+The widget talks to whichever backend its `apiUrl` points at: the Convex
+HTTP routes deliberately mirror the Python paths and response shapes
+(`POST /search`, `GET /product/{id}`, `GET /look/{id}`,
+`GET /sites/{key}/status`), so `frontend/disc-widget.js` needs no edits
+and its Playwright suites stay valid either way. That is what makes the
+cutover reversible.
+
+**The security boundary the Python version lacks**, and the reason this
+phase came first:
+
+```
+publicKey      identifies a tenant. Ships in storefront HTML, so it is
+               NOT a secret. Authorises reading that shop's own catalog.
+merchant token authenticates a merchant. Bearer, hashed at rest, expires.
+               Required for resync, billing, settings — anything that
+               spends money or changes state.
+```
+
+In the Python backend these are the same value, which is why
+`POST /sites/{key}/resync` and `GET /sites/{key}/status` both answer to
+anything anyone can read off a storefront. Don't reintroduce that.
+
+Two more things that were bugs there and are structural here: product
+`currency` is a required field (it was never ingested, so every non-USD
+merchant showed dollar prices), and product lookups go through indexed
+equality rather than an interpolated filter string (the old
+`where(f"id = '{id}'")` was confirmed exploitable — `x' OR '1'='1`
+returned a product whose id never matched).
+
+Embeddings move from local `fastembed` (384-dim) to a hosted provider
+(1536-dim) behind `convex/lib/embeddings.ts`, because Convex has no
+Python runtime and a 130 MB ONNX model will not load in a 512 MiB
+action. The two vector spaces are incompatible — every tenant must be
+re-ingested, there is no conversion.
+
+`frontend/tests/package.json` pins those suites to CommonJS. The repo
+root gained `"type": "module"` for the Convex backend, which would
+otherwise reinterpret the existing `require()`-based Playwright files as
+ES modules.
+
 ## Architecture
 
 ```
