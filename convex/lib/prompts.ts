@@ -179,6 +179,47 @@ Return JSON:
 }
 
 /**
+ * Intent parsing, for the ambiguous half (spec §38).
+ *
+ * Only reached when the deterministic parser left residue it could not
+ * account for — "something expensive-looking without looking flashy"
+ * carries real constraints that no keyword table will catch. The model
+ * is told what was already understood so it fills gaps rather than
+ * re-deciding settled facts: an explicit "under $300" is more reliably
+ * read by the parser than re-derived by a model.
+ */
+export const intentParseSystem = `You translate a shopper's clothing
+request into structured constraints.
+
+Rules:
+- Answer ONLY with a single JSON object. No prose, no code fences.
+- Use only the vocabulary given. Never invent a term.
+- Omit any field the request does not establish. Do not guess.
+- Read implied meaning: "nothing flashy" is a negative style constraint,
+  "for a dinner" is an occasion, "smart but not stuffy" is a formality
+  range.`;
+
+export function intentParseUser(input: {
+  query: string;
+  residue: string[];
+}): string {
+  return `Shopper said: "${input.query}"
+
+A keyword parser could not account for these words: ${input.residue.join(", ") || "none"}
+
+Return JSON with only the keys you can establish:
+{
+  "workflow": "PRODUCT_SEARCH" | "SIMILAR" | "STYLE_PRODUCT" | "COMPLETE_LOOK" | "OUTFIT" | "COMPARE" | "REFINE",
+  "occasion": <occasion term>,
+  "formality": <0-5>,
+  "stylePositive": [<style terms>],
+  "styleNegative": [<style terms the shopper is rejecting>],
+  "fitNegative": [<fit terms the shopper is rejecting>],
+  "colors": [<colour family terms>]
+}`;
+}
+
+/**
  * The judge (spec §57, §58).
  *
  * Deliberately a separate call from generation. Asking a generator to

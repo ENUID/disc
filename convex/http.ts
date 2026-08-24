@@ -113,6 +113,35 @@ http.route({
 });
 
 /**
+ * The decision engine (spec §43-§61).
+ *
+ * A new route rather than a change to `/look/{id}`: the existing one
+ * returns a flat list of complementary products and the widget renders
+ * it that way today. This returns structured outfits with explanations,
+ * which is a different shape. Keeping both means the widget can adopt it
+ * when its UI is ready, without a flag day.
+ */
+http.route({ path: "/outfit", method: "OPTIONS", handler: preflight });
+http.route({
+  path: "/outfit",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const body = await request.json().catch(() => ({}));
+    const publicKey = body.site_key ?? body.publicKey ?? "";
+    if (!publicKey) return json({ outfits: [], status: "unknown" });
+
+    const result = await ctx.runAction(api.outfits.buildLook, {
+      publicKey,
+      query: body.query,
+      anchorProductId: body.product_id,
+      sessionKey: body.session_key,
+      limit: body.limit,
+    });
+    return json(result);
+  }),
+});
+
+/**
  * Boot check. The widget calls this before hiding anything, so a lapsed
  * or unknown tenant never costs a storefront its own search box.
  */
