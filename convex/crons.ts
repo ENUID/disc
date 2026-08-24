@@ -82,7 +82,14 @@ export const drainEnrichment = internalAction({
     // product in it failed, and re-scheduling would spin forever.
     if (result.remaining > 0 && result.enriched > 0) {
       await ctx.scheduler.runAfter(1000, internal.crons.drainEnrichment, { tenantId });
+      return null;
     }
+
+    // Backlog drained. The Brand Brain is derived from product
+    // attributes, so it can only be built once enough of them exist —
+    // `canDeriveBrand` refuses below the coverage threshold, and this is
+    // the point at which coverage stops changing.
+    await ctx.scheduler.runAfter(0, internal.brand.buildBrandBrain, { tenantId });
     return null;
   },
 });
