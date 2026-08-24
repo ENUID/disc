@@ -61,6 +61,32 @@ export const resyncStaleCatalogs = internalAction({
   },
 });
 
+/**
+ * Drain the enrichment backlog.
+ *
+ * `enrichBatch` is bounded per run so it cannot time out, which means a
+ * large catalog needs several passes. This re-schedules itself while
+ * work remains rather than relying on the hourly tick, so a 5,000-product
+ * catalog finishes in minutes instead of days.
+ */
+export const drainEnrichment = internalAction({
+  args: { tenantId: v.id("tenants") },
+  returns: v.null(),
+  handler: async (ctx, { tenantId }) => {
+    const result: { enriched: number; remaining: number } = await ctx.runAction(
+      internal.enrichment.enrichBatch,
+      { tenantId },
+    );
+    // Only continue while progress is actually being made. A batch that
+    // enriched nothing but still reports work remaining means every
+    // product in it failed, and re-scheduling would spin forever.
+    if (result.remaining > 0 && result.enriched > 0) {
+      await ctx.scheduler.runAfter(1000, internal.crons.drainEnrichment, { tenantId });
+    }
+    return null;
+  },
+});
+
 export const purgeExpired = internalAction({
   args: {},
   returns: v.null(),

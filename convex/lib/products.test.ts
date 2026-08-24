@@ -9,7 +9,7 @@ import {
   stripHtml,
   tagList,
   variantAvailable,
-} from "./products.ts";
+} from "./products";
 
 /**
  * These are ports of the Python suite's parsing checks. They pin the two

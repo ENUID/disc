@@ -115,6 +115,12 @@ export const syncCatalog = internalAction({
         catalogStatus: "ready",
         productCount: count,
       });
+
+      // Enrichment is scheduled, never awaited. Spec §29 is explicit that
+      // the full enrichment job must not run synchronously during
+      // installation — the merchant should see "catalog ready" in
+      // seconds, with product intelligence filling in behind it.
+      await ctx.scheduler.runAfter(0, internal.crons.drainEnrichment, { tenantId });
     } catch (err) {
       await ctx.runMutation(internal.tenants.setCatalogStatus, {
         tenantId,

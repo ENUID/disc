@@ -10,7 +10,7 @@ import {
   verifyShopifyOAuthHmac,
   verifyShopifyWebhookHmac,
   verifyStripeSignature,
-} from "./crypto.ts";
+} from "./crypto";
 
 /**
  * Three genuinely different signature schemes, ported from the Python

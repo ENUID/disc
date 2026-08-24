@@ -11,11 +11,6 @@
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
     "types": ["node"],
-    // Test files import with explicit .ts extensions because Node's
-    // type-stripping runner resolves them literally and will not map
-    // .js -> .ts. Convex's own bundler is unaffected — it never sees the
-    // test files.
-    "allowImportingTsExtensions": true
   },
   "include": ["convex/**/*.ts"],
   "exclude": ["node_modules", "frontend", "backend"]

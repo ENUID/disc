@@ -195,6 +195,94 @@ export default defineSchema({
     }),
 
   /**
+   * The Disc intelligence layer (spec §26, §27).
+   *
+   * Separate from `products` on purpose: source facts and model
+   * inference must never share a row, or a resync overwrites what was
+   * inferred and an inference can silently claim to be a fact.
+   *
+   * `cacheKey` is what stops a product being re-analysed on every
+   * request (spec §31). It folds in the content, the schema version, the
+   * prompt version and the model — so changing any one of those
+   * invalidates exactly the work it affects, and nothing else.
+   */
+  productProfiles: defineTable({
+    tenantId: v.id("tenants"),
+    productId: v.id("products"),
+
+    profile: v.any(), // FashionProfile — see lib/fashion-profile.ts
+    provenance: v.any(), // Record<field, Provenance>
+    completeness: v.number(),
+
+    cacheKey: v.string(),
+    schemaVersion: v.string(),
+    lastEnrichedAt: v.number(),
+    /** Fields the model returned that failed vocabulary validation. */
+    rejectedFields: v.optional(v.array(v.string())),
+  })
+    .index("by_tenant_and_product", ["tenantId", "productId"])
+    .index("by_product", ["productId"])
+    .index("by_tenant_and_cache_key", ["tenantId", "cacheKey"]),
+
+  /**
+   * Brand Brain (spec §20). Versioned rather than mutated: §138 requires
+   * that a merchant's correction produces version 2 while past traces
+   * continue to resolve to version 1. Overwriting would make every
+   * historical recommendation unreproducible.
+   */
+  brandBrains: defineTable({
+    tenantId: v.id("tenants"),
+    version: v.number(),
+    isCurrent: v.boolean(),
+
+    styleVector: v.any(),
+    palette: v.any(),
+    formality: v.any(),
+    productWorld: v.any(),
+    voice: v.any(),
+    merchandising: v.optional(v.any()),
+    summary: v.string(),
+
+    derivedFrom: v.any(), // the statistics this was computed from
+    source: v.union(v.literal("derived"), v.literal("merchant_corrected")),
+    confidence: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_tenant_current", ["tenantId", "isCurrent"])
+    .index("by_tenant_version", ["tenantId", "version"]),
+
+  /**
+   * Recommendation trace (spec §81).
+   *
+   * Written for every result, from the first one. The audit's point is
+   * that this cannot be backfilled: if the versions and score components
+   * aren't recorded when the recommendation happens, "why did Disc
+   * recommend that?" is permanently unanswerable for everything already
+   * shipped.
+   */
+  recommendationTraces: defineTable({
+    tenantId: v.id("tenants"),
+    recommendationId: v.string(),
+    sessionKey: v.optional(v.string()),
+    workflow: v.string(),
+
+    request: v.any(),
+    intent: v.optional(v.any()),
+    brandBrainVersion: v.optional(v.number()),
+    candidateIds: v.array(v.string()),
+    finalIds: v.array(v.string()),
+    scores: v.any(),
+    judge: v.optional(v.any()),
+
+    versions: v.any(), // prompt/model/ranker/schema versions
+    fallback: v.optional(v.string()),
+    latencyMs: v.number(),
+    at: v.number(),
+  })
+    .index("by_recommendation_id", ["recommendationId"])
+    .index("by_tenant_and_at", ["tenantId", "at"]),
+
+  /**
    * Shopper session state (spec §36, §37). Structured state, NOT a
    * conversation transcript — "make it cheaper" has to be a field
    * update, not a re-read of chat history.
