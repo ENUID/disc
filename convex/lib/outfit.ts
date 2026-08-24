@@ -98,6 +98,21 @@ export function passesHardConstraints(candidate: Candidate, intent: Intent): boo
     if ((candidate.profile.styleVector[banned] ?? 0) >= 0.5) return false;
   }
 
+  // A large formality gap against an EXPLICIT request.
+  //
+  // Formality is a soft signal in general (§48) and stays one for gaps of
+  // one or two steps — real outfits mix registers slightly, and a
+  // penalty is the right instrument there. But §47 says a *hard
+  // conflict* should reject a candidate, and three steps is a hard
+  // conflict: a formality-5 derby in a "relaxed weekend outfit" is not a
+  // bolder alternative, it is wrong.
+  //
+  // Gated on the shopper having actually stated a level. Inferring one
+  // and then filtering on it would reject products over a guess.
+  if (intent.formality !== null && candidate.profile.formality !== null) {
+    if (Math.abs(intent.formality - candidate.profile.formality) >= 3) return false;
+  }
+
   return true;
 }
 

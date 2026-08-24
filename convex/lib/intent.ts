@@ -123,7 +123,30 @@ const GARMENT_WORDS = [
 ];
 
 /** Words that flip the sense of what follows them. */
-const NEGATORS = new Set(["no", "not", "without", "avoid", "hate", "dislike", "anti", "less"]);
+const NEGATORS = new Set([
+  "no", "not", "without", "avoid", "hate", "dislike", "anti", "less",
+  // "nothing streetwear" and "none of that" are how shoppers actually
+  // phrase a rejection; omitting them meant the constraint was parsed as
+  // residue and silently dropped.
+  "nothing", "none", "never", "except", "excluding", "minus",
+]);
+
+/**
+ * Words that state a formality level (spec §52).
+ *
+ * Without these, "a relaxed casual outfit" constrained nothing and a
+ * formality-5 derby could appear in it — the benchmark caught exactly
+ * that. Formality is a soft signal rather than a hard filter (§48), but
+ * a soft signal that is never set cannot influence anything.
+ */
+const FORMALITY_WORDS: Record<string, number> = {
+  scruffy: 0, sloppy: 0, lounge: 0, loungewear: 0,
+  casual: 1, relaxed: 1, everyday: 1, easy: 1, weekend: 1,
+  "smart-casual": 2, smartcasual: 2, presentable: 2, tidy: 2,
+  smart: 3, polished: 3, sharp: 3, elevated: 3, refined: 3,
+  formal: 4, dressy: 4, tailored: 4, business: 4,
+  black: 5, tie: 5, gala: 5, ceremonial: 5,
+};
 
 /**
  * Parse what can be parsed deterministically.
@@ -175,6 +198,23 @@ export function parseIntent(rawQuery: string): ParseResult {
     if (STOPWORDS.has(word)) {
       consumed.add(index);
       return;
+    }
+
+    // Formality is checked FIRST and never returns early, because these
+    // words overlap every other category: "casual" is also an occasion,
+    // "relaxed" and "tailored" are also fits, "formal" is also a style.
+    // Whichever check ran first used to consume the token, so formality
+    // was never set at all — the benchmark caught a formality-5 derby
+    // appearing in a "relaxed casual" outfit.
+    const formalityLevel = FORMALITY_WORDS[word];
+    if (formalityLevel !== undefined && !negated) {
+      // The strongest statement wins when several appear: "smart formal"
+      // is formal, not an average landing between them.
+      intent.formality =
+        intent.formality === null
+          ? formalityLevel
+          : Math.max(intent.formality, formalityLevel);
+      consumed.add(index);
     }
 
     const occasion = OCCASION_SYNONYMS[word];

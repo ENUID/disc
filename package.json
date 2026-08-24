@@ -11,7 +11,8 @@
     "deploy": "convex deploy",
     "test:integration": "vitest run",
     "verify": "npm run typecheck && npm run lint && npm test && npm run test:integration && node scripts/sync-extension-asset.mjs --check",
-    "sync:extension": "node scripts/sync-extension-asset.mjs"
+    "sync:extension": "node scripts/sync-extension-asset.mjs",
+    "eval": "vitest run convex/evaluation.itest.ts --reporter=verbose"
   },
   "repository": {
     "type": "git",
