@@ -8,7 +8,9 @@
     "lint": "eslint convex --ext .ts",
     "test": "tsx --test 'convex/**/*.test.ts'",
     "dev": "convex dev",
-    "deploy": "convex deploy"
+    "deploy": "convex deploy",
+    "test:integration": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run test:integration"
   },
   "repository": {
     "type": "git",
@@ -25,11 +27,14 @@
     "convex": "^1.45.0"
   },
   "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^26.2.0",
+    "convex-test": "^0.0.56",
     "eslint": "^10.9.0",
     "tsx": "^4.23.12",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.67.0"
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
   },
   "private": true,
   "type": "module"

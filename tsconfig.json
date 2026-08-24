@@ -10,7 +10,7 @@
     "isolatedModules": true,
     "forceConsistentCasingInFileNames": true,
     "allowJs": true,
-    "types": ["node"],
+    "types": ["node", "vite/client"],
   },
   "include": ["convex/**/*.ts"],
   "exclude": ["node_modules", "frontend", "backend"]
