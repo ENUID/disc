@@ -13,3 +13,9 @@ venv/
 # Node / Convex
 node_modules/
 .convex/
+
+# Next.js dashboard build output
+dashboard/.next/
+dashboard/out/
+dashboard/next-env.d.ts
+*.tsbuildinfo

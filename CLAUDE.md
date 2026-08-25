@@ -158,9 +158,50 @@ ES modules.
                        devices_test.js  -> does it fit, across 14 real device profiles
                        coverage_test.js -> can the shopper actually see and hit it
                        dormant_test.js  -> an inactive tenant must not cost a store its search
+/dashboard
+  app/            -> the merchant console (spec §70-§76), Next.js App Router on Vercel.
+                     Seven sections: Overview, Brand, Catalog, AI Boutique,
+                     Analytics, Billing, Settings.
+  lib/api.ts      -> the ONLY place the merchant bearer token is read
+  app/actions.ts  -> every state change, as server actions
+  tests/          -> render_test.js + a mock backend. Three scenarios
+                     (healthy / fresh install / lapsed) x three viewports
 test.html         -> a fake Shopify PDP/search page for local end-to-end testing
 test_search.py    -> scripted test hitting POST /search with a real intent query (demo catalog)
 ```
+
+### The dashboard's one architectural rule
+
+**Every page is a server component, and the merchant token never reaches
+the browser.** That token authorises resync, billing and settings for a
+merchant's whole store, so a copy of it in client JavaScript is a copy
+any injected script on the page can take.
+
+It arrives once in a query string from the OAuth callback, is swapped for
+an httpOnly cookie by `app/app/route.ts`, and after that is read only in
+`lib/api.ts`, server-side. State changes are server actions rather than
+client fetches for the same reason. `render_test.js` asserts it on every
+page in every scenario: the token appears in neither the rendered HTML
+nor any client script payload.
+
+Two things there are load-bearing and easy to undo by accident:
+
+- `app/app/route.ts` returns a **relative** `Location`. Building an
+  absolute one from `request.url` trusts the incoming Host header, which
+  behind Vercel's proxy is not necessarily the host the merchant is on —
+  and redirecting to a different origin drops the cookie that was just
+  set, so a successful login lands back on the sign-in page. This was a
+  real failure caught by the suite.
+- `/app` is a route handler, so the overview lives at `/app/overview`;
+  a `page.tsx` cannot share a path with a `route.ts`.
+
+The scenarios that matter in `render_test.js` are `fresh` and `lapsed`,
+not `healthy`. Any dashboard looks fine full of data. Those two are where
+a merchant either understands what is wrong or concludes the product is
+broken — so the suite asserts that a rate with no denominator never
+renders as `0%`, that a missing Brand Brain reads as pending rather than
+failed, and that `past_due` reaches the merchant as "Payment failed"
+rather than as raw Stripe vocabulary.
 
 ### Backend
 
@@ -648,6 +689,20 @@ STRIPE_SECRET_KEY=sk_test_fake PUBLIC_URL=http://localhost:8001 \
 DISC_API=http://localhost:8001 DISC_KEY=disc_... \
   node frontend/tests/dormant_test.js
 ```
+
+The dashboard verifies itself, and needs no backend at all — its suite
+ships a mock one, which is what makes the three scenarios possible:
+
+```bash
+cd dashboard && npm install
+npm run verify                 # typecheck, build, then the render suite
+DISC_TEST_OUT=./shots npm test # same, keeping the screenshots
+```
+
+It is not in the repo root's `npm run verify` on purpose: it builds Next
+and drives a browser, which is a couple of minutes rather than a couple
+of seconds. Same reason the widget's Playwright suites are not in there
+either.
 
 To exercise the real signup path locally, `POST /sites` with any real
 Shopify store's domain — it reads the public catalog, so no credentials
