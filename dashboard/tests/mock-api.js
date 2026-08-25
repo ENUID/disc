@@ -114,6 +114,12 @@ const SCENARIOS = {
       subscriptionStatus: "active",
       billingEnabled: true,
     },
+    looks: [
+      look("look_1", "Autumn campaign 01", "approved", "dinner", "minimal"),
+      look("look_2", "Autumn campaign 02", "approved", "work", "classic"),
+      look("look_3", "Weekend 01", "draft", "everyday", "minimal"),
+      look("look_4", "Retired spring look", "archived", "travel", "resort"),
+    ],
     billingState: {
       enabled: true,
       subscriptionStatus: "active",
@@ -198,6 +204,7 @@ const SCENARIOS = {
       subscriptionStatus: "trialing",
       billingEnabled: true,
     },
+    looks: [],
     billingState: {
       enabled: true,
       subscriptionStatus: "trialing",
@@ -292,6 +299,10 @@ const SCENARIOS = {
       subscriptionStatus: "past_due",
       billingEnabled: true,
     },
+    looks: [
+      look("look_a", "Never approved", "draft", "everyday", "streetwear"),
+      look("look_b", "Also never approved", "draft", null, null),
+    ],
     billingState: {
       enabled: true,
       subscriptionStatus: "past_due",
@@ -314,6 +325,52 @@ function stages({ catalog = false, products = false, brand = false, live = false
     { key: "preview", label: "Ready to preview", done: brand && catalog, failed: false },
     { key: "live", label: "Live on your storefront", done: live, failed: false },
   ];
+}
+
+function look(id, title, status, occasion, style) {
+  return {
+    id,
+    title,
+    status,
+    source: "uploaded",
+    occasion,
+    style,
+    season: "autumn",
+    formality: 3,
+    itemCount: 3,
+    // No real image in the mock: an <img> with a dead src would show as
+    // a failed request and the suite would rightly flag it.
+    imageUrl: null,
+    products: [
+      { productId: "p1", title: "White Oxford Shirt", imageUrl: "", price: 120, currency: "GBP", slot: "top", detectedLabel: "white shirt" },
+      { productId: "p2", title: "Navy Wool Trouser", imageUrl: "", price: 210, currency: "GBP", slot: "bottom", detectedLabel: "navy trousers" },
+      { productId: "p3", title: "Brown Leather Loafer", imageUrl: "", price: 290, currency: "GBP", slot: "footwear", detectedLabel: "brown loafers" },
+    ],
+    createdAt: Date.now() - 3 * 86400000,
+  };
+}
+
+function lookStats(looks) {
+  const approved = looks.filter((l) => l.status === "approved");
+  return {
+    total: looks.length,
+    approved: approved.length,
+    draft: looks.filter((l) => l.status === "draft").length,
+    // Every unordered pair in every approved look, deduplicated — the
+    // same definition the real backend uses.
+    relationships: new Set(
+      approved.flatMap((look) => {
+        const ids = look.products.map((p) => p.productId);
+        const pairs = [];
+        for (let i = 0; i < ids.length; i++) {
+          for (let j = i + 1; j < ids.length; j++) {
+            pairs.push([ids[i], ids[j]].sort().join("|"));
+          }
+        }
+        return pairs;
+      }),
+    ).size,
+  };
 }
 
 const PLANS = [
@@ -366,6 +423,22 @@ function start(port = 8787) {
           experience: data.experience,
           brand: data.brand,
         });
+      case "/merchant/looks":
+        // Stats are DERIVED from the looks, never written by hand. A
+        // fixture claiming 11 approved while listing 2 makes every
+        // screenshot taken from it a lie.
+        return send({ looks: data.looks ?? [], stats: lookStats(data.looks ?? []) });
+      case "/merchant/looks/upload-url":
+        return send({ uploadUrl: `http://localhost:${port}/__upload` });
+      case "/merchant/looks/analyse":
+        return send(data.analysis ?? { detected: [], suggestions: [] });
+      case "/merchant/looks/suggest":
+        return send({ suggestions: [] });
+      case "/merchant/looks/save":
+        return send({ lookId: "look_1" });
+      case "/merchant/looks/status":
+      case "/merchant/looks/delete":
+        return send({ ok: true });
       case "/merchant/billing":
         return send({ plans: PLANS, trialDays: 14, enabled: true, state: data.billingState });
       case "/merchant/resync":

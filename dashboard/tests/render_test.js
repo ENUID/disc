@@ -51,6 +51,7 @@ const OUT = process.env.DISC_TEST_OUT || require("os").tmpdir();
 
 const SECTIONS = [
   ["Overview", "/app/overview"],
+  ["Looks", "/app/looks"],
   ["Brand", "/app/brand"],
   ["Catalog", "/app/catalog"],
   ["AI Boutique", "/app/experience"],
@@ -185,7 +186,7 @@ async function main() {
 
           // The nav is present and complete on every page.
           const navCount = await page.locator("nav.nav a").count();
-          check(navCount === 7, `${tag} all seven sections in nav`, `saw ${navCount}`);
+          check(navCount === 8, `${tag} every section in nav`, `saw ${navCount}`);
 
           // Stripe's status vocabulary is precise and opaque to anyone
           // who does not work with Stripe. It leaked into the overview
@@ -286,6 +287,25 @@ async function main() {
       ).length,
     );
     check(runTogether === 0, "field labels are block-level", `${runTogether} inline`);
+
+    await page.goto(`${BASE}/app/looks`, { waitUntil: "load" });
+    text = await page.locator("main").innerText();
+    // The header counts and the rendered lists describe the same
+    // library. They disagreed once, which made every screenshot a lie.
+    const approvedCards = await page.locator("main .card").filter({ hasText: "In use" }).count();
+    check(
+      new RegExp(`Approved looks\\s*\\n?\\s*${approvedCards}\\b`).test(text),
+      "looks: the approved count matches the approved cards",
+      `${approvedCards} cards`,
+    );
+    check(
+      /Optional, and Disc works without it/i.test(text),
+      "looks: the page says Disc works without any of this",
+    );
+    check(
+      /Not influencing recommendations yet/i.test(text),
+      "looks: a draft says plainly that it is not in use",
+    );
 
     await page.goto(`${BASE}/app/billing`, { waitUntil: "load" });
     text = await page.locator("main").innerText();

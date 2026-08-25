@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { apiPost } from "@/lib/api";
 import { clearToken } from "@/lib/session";
 import type { WidgetConfig } from "@/lib/types";
+import type { AnalyseResult, Suggestion } from "@/lib/looks-types";
 
 /**
  * Every state change the dashboard can make.
@@ -21,7 +22,7 @@ import type { WidgetConfig } from "@/lib/types";
 
 export type ActionResult = { ok: true; message?: string } | { ok: false; error: string };
 
-function failed(error: unknown): ActionResult {
+function failed(error: unknown): { ok: false; error: string } {
   const message = error instanceof Error ? error.message : "Something went wrong";
   return { ok: false, error: message };
 }
@@ -174,4 +175,127 @@ export async function openPortal(): Promise<ActionResult> {
 export async function signOut(): Promise<void> {
   await clearToken();
   redirect("/");
+}
+
+// ---------------------------------------------------------------------
+// Look Builder
+// ---------------------------------------------------------------------
+
+/**
+ * A direct-to-storage upload URL.
+ *
+ * The image bytes go from the merchant's browser straight to Convex
+ * storage — they never pass through this Next.js server, which would
+ * otherwise be buffering multi-megabyte campaign photography through a
+ * serverless function for no reason.
+ */
+export async function getUploadUrl(): Promise<
+  { ok: true; uploadUrl: string } | { ok: false; error: string }
+> {
+  try {
+    const result = await apiPost<{ uploadUrl: string }>("/merchant/looks/upload-url");
+    return { ok: true, uploadUrl: result.uploadUrl };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+/**
+ * Analyse an uploaded image.
+ *
+ * Returns what the model saw and what it thinks each garment might be in
+ * the catalog. Nothing is saved: the merchant maps the garments, and
+ * their mapping is what the look is made of.
+ */
+export async function analyseImage(
+  storageId: string,
+): Promise<
+  { ok: true; result: AnalyseResult } | { ok: false; error: string }
+> {
+  try {
+    const result = await apiPost<AnalyseResult>("/merchant/looks/analyse", {
+      storageId,
+    });
+    return { ok: true, result };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+/** Catalog candidates for a garment the merchant is mapping by hand. */
+export async function suggestProducts(
+  description: string,
+  slot?: string,
+): Promise<{ ok: true; suggestions: Suggestion[] } | { ok: false; error: string }> {
+  try {
+    const result = await apiPost<{ suggestions: Suggestion[] }>(
+      "/merchant/looks/suggest",
+      { description, slot },
+    );
+    return { ok: true, suggestions: result.suggestions };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function saveLook(input: {
+  lookId?: string;
+  title: string;
+  imageStorageId?: string;
+  detected?: unknown;
+  items: Array<{ productId: string; detectedLabel?: string; confidence?: number }>;
+  occasion?: string;
+  style?: string;
+  season?: string;
+  formality?: number;
+  notes?: string;
+}): Promise<{ ok: true; lookId: string } | { ok: false; error: string }> {
+  try {
+    const result = await apiPost<{ lookId?: string; error?: string }>(
+      "/merchant/looks/save",
+      input,
+    );
+    if (!result.lookId) return { ok: false, error: result.error ?? "Could not save" };
+    revalidatePath("/app/looks");
+    return { ok: true, lookId: result.lookId };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+/**
+ * Approve, un-approve or archive.
+ *
+ * The only call here that changes what shoppers see — approving is what
+ * lets a look into the outfit graph.
+ */
+export async function setLookStatus(
+  lookId: string,
+  status: "draft" | "approved" | "archived",
+): Promise<ActionResult> {
+  try {
+    await apiPost("/merchant/looks/status", { lookId, status });
+    revalidatePath("/app/looks");
+    return {
+      ok: true,
+      message:
+        status === "approved"
+          ? "Approved. Disc will use this when styling shoppers."
+          : status === "archived"
+            ? "Archived. Disc has stopped using it."
+            : "Moved back to draft. Disc has stopped using it.",
+    };
+  } catch (error) {
+    return failed(error);
+  }
+}
+
+export async function deleteLook(lookId: string): Promise<ActionResult> {
+  try {
+    await apiPost("/merchant/looks/delete", { lookId });
+    revalidatePath("/app/looks");
+    return { ok: true, message: "Deleted." };
+  } catch (error) {
+    return failed(error);
+  }
 }

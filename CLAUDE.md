@@ -160,8 +160,8 @@ ES modules.
                        dormant_test.js  -> an inactive tenant must not cost a store its search
 /dashboard
   app/            -> the merchant console (spec §70-§76), Next.js App Router on Vercel.
-                     Seven sections: Overview, Brand, Catalog, AI Boutique,
-                     Analytics, Billing, Settings.
+                     Overview, Brand, Catalog, Looks, AI Boutique, Analytics,
+                     Billing, Settings.
   lib/api.ts      -> the ONLY place the merchant bearer token is read
   app/actions.ts  -> every state change, as server actions
   tests/          -> render_test.js + a mock backend. Three scenarios
@@ -169,6 +169,64 @@ ES modules.
 test.html         -> a fake Shopify PDP/search page for local end-to-end testing
 test_search.py    -> scripted test hitting POST /search with a real intent query (demo catalog)
 ```
+
+### The Look Builder and the outfit graph
+
+A brand's campaign imagery already contains styling decisions someone
+made deliberately. Disc could not see them: compatibility was inferred
+from product attributes alone. The Look Builder turns those decisions
+into structured data.
+
+```
+upload image -> vision detects garments -> Disc suggests catalog matches
+             -> MERCHANT CONFIRMS -> structured look -> outfit graph
+```
+
+**The capitalised step is the product.** A model can see "a white shirt"
+in a photograph and have no idea which of fourteen white shirts it is.
+Detection produces *candidates*; auto-assigning would quietly teach Disc
+a relationship between products that were never photographed together,
+and nothing downstream could tell that from a real one. `looks.detected`
+(what the model saw) and `looks.items` (what the merchant confirmed) are
+separate fields for the same reason `products` and `productProfiles` are
+separate tables.
+
+**The cold-start guarantee is load-bearing, and it is tested twice.**
+Looks add a capped bonus (`MAX_AFFINITY_BONUS`, currently 0.06 on a ~0..1
+scale) *on top of* the existing weighted sum — never folded into it,
+because a sixth term inside would renormalise the other five and shift
+every existing result for every tenant. A tenant with no looks gets zero.
+If ranking ever came to depend on approved looks, a brand that installed
+Disc this morning would get worse results than one that never opens the
+feature.
+
+The two assertions, both in `lib/looks.test.ts`:
+- `rankOutfits(...)` with no affinity argument must **deep-equal** the
+  same call with an empty graph. Passing nothing and passing empty are
+  indistinguishable.
+- A vouched outfit must score higher through the **bonus alone**, with
+  compatibility, brand, fit and relevance unchanged — otherwise
+  "inertness" is trivially satisfied by a feature that does nothing.
+
+The cap exists to stop twenty looks from one black campaign turning the
+whole boutique black for every shopper. The bonus also ramps in with
+library size, so the first look uploaded doesn't outrank everything it
+touches on the evidence of one image.
+
+**Approval is a separate, explicit act.** Saving lands a look as a draft;
+only approving lets it into the graph. Un-approving genuinely removes its
+edges, and re-mapping rebuilds them rather than adding — a stale edge
+would keep teaching a relationship the merchant explicitly withdrew.
+
+**`looks.imageStorageId` is the one deletion hole `privacy.itest.ts`
+cannot see**, because Convex file storage is not a table and the guard
+reads the schema. `purgeTenant` deletes the files explicitly, and
+`looks.itest.ts` asserts storage is empty after a purge. Any future
+feature that stores files needs the same treatment.
+
+Deliberately not built: Disc-generated looks with approve/reject. It's a
+separate workflow, and the merchant-upload path is the half with no
+cold-start problem — a brand's campaign imagery already exists.
 
 ### The dashboard's one architectural rule
 
