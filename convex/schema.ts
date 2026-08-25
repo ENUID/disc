@@ -283,6 +283,108 @@ export default defineSchema({
     .index("by_tenant_and_cache_key", ["tenantId", "cacheKey"]),
 
   /**
+   * Looks — the merchant's own styling, taught to Disc.
+   *
+   * A brand already has campaign imagery, lookbooks and editorial shots
+   * in which someone decided these particular pieces belong together.
+   * That decision is the most valuable styling signal there is, and
+   * until now Disc could not see it: it inferred compatibility from
+   * product attributes and never learned that this shirt and these
+   * trousers were deliberately photographed as one outfit.
+   *
+   * DETECTED AND CONFIRMED ARE SEPARATE FIELDS, for the same reason
+   * `products` and `productProfiles` are separate tables. `detected` is
+   * what the vision model saw in the image. `items` is what the merchant
+   * confirmed it maps to. Merging them would let a re-analysis silently
+   * overwrite a merchant's decision, and would make "did a human approve
+   * this?" unanswerable — which is exactly the question that makes an
+   * approved look worth more than an inferred one.
+   *
+   * A look only influences recommendations once `status` is "approved".
+   * Detection is a suggestion, never an assertion.
+   */
+  looks: defineTable({
+    tenantId: v.id("tenants"),
+    title: v.string(),
+
+    // "uploaded" — merchant supplied an image and mapped it.
+    // "merchant_built" — assembled by hand in the dashboard, no image.
+    source: v.union(v.literal("uploaded"), v.literal("merchant_built")),
+    /** Convex file storage. Absent for a hand-built look. */
+    imageStorageId: v.optional(v.id("_storage")),
+
+    /**
+     * Raw vision output. Provenance, never merged into `items`, and kept
+     * so a look can be re-mapped without paying for the image again.
+     */
+    detected: v.optional(v.any()),
+
+    /** What the merchant confirmed each detected garment maps to. */
+    items: v.array(
+      v.object({
+        productId: v.id("products"),
+        slot: v.string(),
+        /** What the model called it, for showing the merchant its work. */
+        detectedLabel: v.optional(v.string()),
+        /** Model's confidence in the *suggestion*, not in the confirmation. */
+        confidence: v.optional(v.number()),
+      }),
+    ),
+
+    // Derived from the confirmed items, merchant-overridable. Stored
+    // rather than computed so a look stays what the merchant said it was
+    // even after its products are re-enriched.
+    occasion: v.optional(v.string()),
+    style: v.optional(v.string()),
+    formality: v.optional(v.number()),
+    season: v.optional(v.string()),
+    notes: v.optional(v.string()),
+
+    status: v.union(
+      v.literal("draft"),
+      v.literal("approved"),
+      v.literal("archived"),
+    ),
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_tenant", ["tenantId"])
+    .index("by_tenant_and_status", ["tenantId", "status"]),
+
+  /**
+   * The outfit graph (§7 of the product brief).
+   *
+   * One row per unordered product pair that appeared together in an
+   * approved look. Denormalised out of `looks` rather than derived per
+   * request: ranking needs "is this pair known-good?" for every
+   * candidate combination, and re-deriving it from every look on every
+   * request would put the whole library in the hot path.
+   *
+   * `productA` is always the lexicographically smaller id, so a pair has
+   * exactly one row rather than two — otherwise the same relationship
+   * would be counted twice in scoring.
+   *
+   * IMPORTANT: this is *additive evidence*, never a requirement. A
+   * tenant with no looks has no edges, contributes no bonus, and gets
+   * exactly the recommendations they get today. See `affinityBonus` in
+   * lib/looks.ts.
+   */
+  lookEdges: defineTable({
+    tenantId: v.id("tenants"),
+    productA: v.id("products"),
+    productB: v.id("products"),
+    /** How many approved looks contain this pair. More looks, more confident. */
+    weight: v.number(),
+    lookIds: v.array(v.id("looks")),
+    updatedAt: v.number(),
+  })
+    .index("by_tenant_and_pair", ["tenantId", "productA", "productB"])
+    // Fetches every edge touching one product, which is what scoring needs.
+    .index("by_tenant_and_a", ["tenantId", "productA"])
+    .index("by_tenant_and_b", ["tenantId", "productB"]),
+
+  /**
    * Brand Brain (spec §20). Versioned rather than mutated: §138 requires
    * that a merchant's correction produces version 2 while past traces
    * continue to resolve to version 1. Overwriting would make every

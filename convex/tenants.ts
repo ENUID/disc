@@ -252,6 +252,34 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // Looks, their edges, AND their stored images.
+    //
+    // The images are the part worth being careful about: file storage is
+    // not a table, so the schema-reading guard in `privacy.itest.ts`
+    // cannot see it. A merchant's campaign photography would outlive
+    // their redacted shop and nothing would fail. `looks.itest.ts`
+    // asserts storage is empty after a purge for exactly this reason.
+    for (;;) {
+      const batch = await ctx.db
+        .query("looks")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const look of batch) {
+        if (look.imageStorageId) await ctx.storage.delete(look.imageStorageId);
+        await ctx.db.delete(look._id);
+      }
+    }
+
+    for (;;) {
+      const batch = await ctx.db
+        .query("lookEdges")
+        .withIndex("by_tenant_and_a", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     // Cost accounting goes too.
     //
     // Arguably it need not: it holds no shopper data and no merchant

@@ -1,4 +1,5 @@
 import { usageSink } from "./usage";
+import { buildAffinity } from "./lib/looks";
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -208,11 +209,22 @@ export const buildLook = action({
     const brand = await ctx.runQuery(internal.outfits.currentBrandStyle, {
       tenantId: tenant.tenantId,
     });
+
+    // The merchant's own approved looks. For a tenant with none — every
+    // tenant on day one — this is empty and contributes nothing, which
+    // is the cold-start guarantee `looks.itest.ts` pins.
+    const graph = await ctx.runQuery(internal.looks.affinityFor, {
+      tenantId: tenant.tenantId,
+    });
+    const affinity = buildAffinity(graph.edges, graph.lookCount);
+
     const { outfits, funnel } = buildOutfits(
       candidates,
       intent,
       brand?.styleVector ?? null,
       { ...DEFAULT_LIMITS, final: Math.min(args.limit ?? DEFAULT_LIMITS.final, 5) },
+      undefined,
+      affinity,
     );
 
     if (outfits.length === 0) {

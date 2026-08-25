@@ -32,6 +32,8 @@ const TENANT_OWNED = [
   "shopperSessions",
   "merchantSessions",
   "modelUsage",
+  "looks",
+  "lookEdges",
 ] as const;
 
 async function seedFullTenant(

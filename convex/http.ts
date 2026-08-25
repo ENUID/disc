@@ -692,6 +692,158 @@ http.route({
 });
 
 // ---------------------------------------------------------------------
+// Look Builder — teaching Disc a brand's own styling.
+// ---------------------------------------------------------------------
+
+merchantRoute("/merchant/looks", async (ctx, tenantId, request) => {
+  const status = new URL(request.url).searchParams.get("status") ?? undefined;
+  const [looks, stats] = await Promise.all([
+    ctx.runQuery(internal.looks.listLooks, { tenantId, status }),
+    ctx.runQuery(internal.looks.lookStats, { tenantId }),
+  ]);
+  return { looks, stats };
+});
+
+/** A direct-to-storage upload URL, so image bytes never pass through here. */
+http.route({
+  path: "/merchant/looks/upload-url",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+    return json({ uploadUrl: await ctx.runMutation(internal.looks.generateUploadUrl, {}) });
+  }),
+});
+allowPreflight("/merchant/looks/upload-url");
+
+/**
+ * Analyse an uploaded image.
+ *
+ * Returns detections and catalog *suggestions*. Nothing is saved and
+ * nothing is assigned — the merchant maps the garments to products, and
+ * their mapping is what the look is made of. A model that can see "a
+ * white shirt" has no idea which of fourteen white shirts it is.
+ */
+http.route({
+  path: "/merchant/looks/analyse",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    if (!body.storageId) return json({ detail: "storageId is required" }, 400);
+
+    // Same rule as a catalog resync: analysing an image is a vision call
+    // and nothing legitimate needs to do it in a tight loop.
+    const limited = await rateLimited(ctx as MerchantCtx, "resync", String(tenantId));
+    if (limited) return limited;
+
+    return json(
+      await ctx.runAction(internal.looks.analyseImage, {
+        tenantId,
+        storageId: body.storageId,
+      }),
+    );
+  }),
+});
+allowPreflight("/merchant/looks/analyse");
+
+/** Catalog candidates for a garment the merchant is mapping by hand. */
+http.route({
+  path: "/merchant/looks/suggest",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    return json({
+      suggestions: await ctx.runAction(internal.looks.suggestMatches, {
+        tenantId,
+        description: String(body.description ?? "").slice(0, 300),
+        slot: body.slot ? String(body.slot) : undefined,
+      }),
+    });
+  }),
+});
+allowPreflight("/merchant/looks/suggest");
+
+http.route({
+  path: "/merchant/looks/save",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const result = await ctx.runMutation(internal.looks.saveLook, {
+      tenantId,
+      lookId: body.lookId,
+      title: String(body.title ?? ""),
+      source: body.imageStorageId ? "uploaded" : "merchant_built",
+      imageStorageId: body.imageStorageId,
+      detected: body.detected,
+      items: Array.isArray(body.items) ? body.items : [],
+      occasion: body.occasion,
+      style: body.style,
+      formality: body.formality,
+      season: body.season,
+      notes: body.notes,
+    });
+    return json(result, "error" in result ? 400 : 200);
+  }),
+});
+allowPreflight("/merchant/looks/save");
+
+/**
+ * Approve, un-approve or archive.
+ *
+ * The only call that changes what shoppers see — approval is what lets a
+ * look into the outfit graph, and it is deliberately not a side effect
+ * of saving.
+ */
+http.route({
+  path: "/merchant/looks/status",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const status = String(body.status ?? "");
+    if (!["draft", "approved", "archived"].includes(status)) {
+      return json({ detail: "Unknown status" }, 400);
+    }
+
+    const ok = await ctx.runMutation(internal.looks.setLookStatus, {
+      tenantId,
+      lookId: body.lookId,
+      status,
+    });
+    return json({ ok }, ok ? 200 : 404);
+  }),
+});
+allowPreflight("/merchant/looks/status");
+
+http.route({
+  path: "/merchant/looks/delete",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const body = await request.json().catch(() => ({}));
+    const ok = await ctx.runMutation(internal.looks.deleteLook, {
+      tenantId,
+      lookId: body.lookId,
+    });
+    return json({ ok }, ok ? 200 : 404);
+  }),
+});
+allowPreflight("/merchant/looks/delete");
+
+// ---------------------------------------------------------------------
 // Billing (spec §76, §133).
 // ---------------------------------------------------------------------
 

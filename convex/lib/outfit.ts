@@ -13,6 +13,7 @@
  * configurable" and because the right values depend on catalog size.
  */
 
+import { affinityBonus, EMPTY_AFFINITY, type AffinityGraph } from "./looks";
 import {
   brandCoherence,
   CompatibilityWeights,
@@ -49,6 +50,8 @@ export type Outfit = {
     brand: number;
     shopperFit: number;
     relevance: number;
+    /** Contribution from the merchant's own approved looks. 0 for most tenants. */
+    affinity: number;
     final: number;
   };
   detail: OutfitScore;
@@ -263,6 +266,16 @@ export function rankOutfits(
   intent: Intent,
   brandStyleVector: Record<string, number> | null,
   weights: CompatibilityWeights = DEFAULT_WEIGHTS,
+  /**
+   * The merchant's own outfit graph, from approved looks.
+   *
+   * Defaulted, and the default is empty. That default IS the cold-start
+   * guarantee: a tenant with no looks — every tenant on day one — gets
+   * a zero bonus and therefore byte-identical output to before this
+   * parameter existed. `looks.itest.ts` asserts that identity rather
+   * than trusting this comment.
+   */
+  affinity: AffinityGraph = EMPTY_AFFINITY,
 ): Outfit[] {
   const outfits: Outfit[] = [];
 
@@ -274,8 +287,18 @@ export function rankOutfits(
     const relevance = pieces.reduce((sum, p) => sum + p.relevance, 0) / pieces.length;
     const boost = pieces.reduce((sum, p) => sum + (p.boost ?? 0), 0) / pieces.length;
 
+    // Added ON TOP of the weighted sum, never folded into it. Adding a
+    // sixth term inside would renormalise the other five and shift every
+    // existing result — including the evaluation baseline — for every
+    // tenant, whether or not they have ever uploaded a look.
+    const affinityPart = affinityBonus(
+      pieces.map((p) => p.productId),
+      affinity,
+    );
+
     const final =
-      fit * 0.34 + brand * 0.24 + detail.total * 0.28 + relevance * 0.1 + boost * 0.04;
+      fit * 0.34 + brand * 0.24 + detail.total * 0.28 + relevance * 0.1 + boost * 0.04 +
+      affinityPart;
 
     const slots: Partial<Record<Slot, string>> = {};
     for (const piece of pieces) {
@@ -292,6 +315,9 @@ export function rankOutfits(
         brand: round(brand),
         shopperFit: round(fit),
         relevance: round(relevance),
+        // Surfaced so a trace can show that a merchant's own styling
+        // moved this outfit, rather than the bonus being invisible.
+        affinity: round(affinityPart),
         final: round(final),
       },
       detail,
@@ -431,6 +457,8 @@ export function buildOutfits(
   brandStyleVector: Record<string, number> | null,
   limits: FunnelLimits = DEFAULT_LIMITS,
   weights: CompatibilityWeights = DEFAULT_WEIGHTS,
+  /** Merchant-approved looks. Empty by default — see rankOutfits. */
+  affinity: AffinityGraph = EMPTY_AFFINITY,
 ): { outfits: Outfit[]; funnel: Record<string, number> } {
   const buckets = bucketBySlot(candidates, intent, limits);
   const plans = requiredSlots(buckets);
@@ -443,10 +471,13 @@ export function buildOutfits(
   }
   combinations = combinations.slice(0, limits.combinations);
 
-  const ranked = rankOutfits(combinations, intent, brandStyleVector, weights).slice(
-    0,
-    limits.ranked,
-  );
+  const ranked = rankOutfits(
+    combinations,
+    intent,
+    brandStyleVector,
+    weights,
+    affinity,
+  ).slice(0, limits.ranked);
   const shortlist = ranked.slice(0, limits.judged);
   const diverse = selectDiverse(shortlist, limits.final);
 

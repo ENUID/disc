@@ -158,7 +158,7 @@ function toOutfits(
       slots: outfit.slots as never,
       pieces,
       direction: "",
-      scores: { compatibility: 0, brand: 0, shopperFit: 0, relevance: 0, final: 0 },
+      scores: { compatibility: 0, brand: 0, shopperFit: 0, relevance: 0, affinity: 0, final: 0 },
       detail: {
         total: 0, pairwise: 0, worstPair: 0, palette: 0, cohesion: 0,
         issues: [], notes: [],
