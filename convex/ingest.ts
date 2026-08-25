@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -52,7 +53,10 @@ export const syncCatalog = internalAction({
 
     try {
       const accessToken = await decryptSecret(tenant.accessTokenCipher, ENCRYPTION_KEY());
-      const provider = getEmbeddingProvider(env("OPENAI_API_KEY"));
+      const provider = getEmbeddingProvider(
+        env("OPENAI_API_KEY"),
+        usageSink(ctx, tenantId, "embedding"),
+      );
 
       let cursor: string | null = null;
       let pages = 0;
@@ -207,7 +211,10 @@ export const syncSingleProduct = internalAction({
         { tenantId, products: [canonical] },
       );
       if (changed.length > 0) {
-        const provider = getEmbeddingProvider(env("OPENAI_API_KEY"));
+        const provider = getEmbeddingProvider(
+          env("OPENAI_API_KEY"),
+          usageSink(ctx, tenantId, "embedding"),
+        );
         await embedProducts(ctx, tenantId, changed, provider);
       }
     } catch {

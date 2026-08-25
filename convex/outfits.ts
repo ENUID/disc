@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -27,7 +28,7 @@ import {
   outfitJudgeUser,
   PROMPT_VERSIONS,
 } from "./lib/prompts";
-import { extractJson, reasoningProvider } from "./lib/providers";
+import { extractJson, reasoningProvider, type UsageSink } from "./lib/providers";
 import { slotForGarment } from "./lib/taxonomy";
 
 /**
@@ -152,11 +153,18 @@ export const buildLook = action({
         })
       : null;
     const prior = (priorState?.state as Intent | undefined) ?? null;
-    const intent = await resolveIntent(args.query ?? "", prior);
+    const intent = await resolveIntent(
+      args.query ?? "",
+      prior,
+      usageSink(ctx, tenant.tenantId, "intent"),
+    );
 
     // 2. Retrieval. Cast wide — assembly needs options in every slot,
     //    and the funnel narrows from here.
-    const provider = getEmbeddingProvider(env("OPENAI_API_KEY"));
+    const provider = getEmbeddingProvider(
+      env("OPENAI_API_KEY"),
+      usageSink(ctx, tenant.tenantId, "query_embedding"),
+    );
     const retrievalText = args.query?.trim()
       ? args.query
       : await anchorText(ctx, tenant.tenantId, args.anchorProductId);
@@ -233,7 +241,12 @@ export const buildLook = action({
     }
 
     // 6. Judge — independent, and only on the shortlist.
-    const judged = await judgeOutfits(outfits.slice(0, JUDGE_TOP_N), args.query ?? "", brand);
+    const judged = await judgeOutfits(
+      outfits.slice(0, JUDGE_TOP_N),
+      args.query ?? "",
+      brand,
+      usageSink(ctx, tenant.tenantId, "judge"),
+    );
     judged.sort((a, b) => b.blended - a.blended);
 
     // 7. Explanation, from the actual evidence.
@@ -249,7 +262,13 @@ export const buildLook = action({
           imageUrl: "",
         })),
         direction: outfit.direction,
-        explanation: await explain(outfit, verdict, args.query ?? "", brand),
+        explanation: await explain(
+          outfit,
+          verdict,
+          args.query ?? "",
+          brand,
+          usageSink(ctx, tenant.tenantId, "explanation"),
+        ),
         confidence: Math.min(outfit.confidence, verdict.fallback ? 1 : verdict.confidence + 0.3),
         issues: [...new Set([...outfit.issues, ...verdict.issues])],
       });
@@ -302,7 +321,11 @@ export const buildLook = action({
  *      without looking flashy" parses to nothing useful, and silently
  *      dropping it would answer a question the shopper didn't ask.
  */
-async function resolveIntent(query: string, prior: Intent | null): Promise<Intent> {
+async function resolveIntent(
+  query: string,
+  prior: Intent | null,
+  sink: UsageSink,
+): Promise<Intent> {
   if (prior && query.trim()) {
     const followUp = applyFollowUp(prior, query);
     if (followUp) return followUp;
@@ -311,7 +334,7 @@ async function resolveIntent(query: string, prior: Intent | null): Promise<Inten
   const parsed = parseIntent(query);
   if (!parsed.needsReasoning) return parsed.intent;
 
-  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "fast");
+  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "fast", sink);
   try {
     const response = await model.complete({
       system: intentParseSystem,
@@ -364,8 +387,9 @@ async function judgeOutfits(
   outfits: Outfit[],
   request: string,
   brand: { summary: string } | null,
+  sink: UsageSink,
 ) {
-  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "strong");
+  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "strong", sink);
 
   return await Promise.all(
     outfits.map(async (outfit) => {
@@ -409,12 +433,13 @@ async function explain(
   verdict: { issues: string[] },
   request: string,
   brand: { voice: { tone: string[]; preferredTerms: string[]; avoidTerms: string[] } | null } | null,
+  sink: UsageSink,
 ): Promise<string> {
   const evidence = [...outfit.detail.notes];
   if (outfit.scores.brand > 0.7) evidence.push("sits comfortably inside the brand's world");
   if (evidence.length === 0) evidence.push("the pieces share a consistent register");
 
-  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "fast");
+  const model = reasoningProvider(env("ANTHROPIC_API_KEY"), "fast", sink);
   try {
     const response = await model.complete({
       system: explanationSystem,

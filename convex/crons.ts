@@ -6,6 +6,7 @@ import {
   EVENT_RETENTION_DAYS,
   RESYNC_INTERVAL_HOURS,
   SHOPPER_SESSION_RETENTION_DAYS,
+  USAGE_RETENTION_DAYS,
 } from "./lib/env";
 
 /**
@@ -111,6 +112,23 @@ export const purgeExpired = internalAction({
     for (let i = 0; i < 10; i++) {
       const purged: number = await ctx.runMutation(internal.billing.purgeRateLimits, {});
       if (purged < 500) break;
+    }
+
+    // Model usage. Kept far longer than events: this is the record that
+    // justifies a price, and a year-over-year comparison is worth
+    // having. It is also tiny — one row per tenant per day per operation
+    // per model — so the retention is generous rather than grudging.
+    const usageCutoff = new Date(
+      Date.now() - USAGE_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+    )
+      .toISOString()
+      .slice(0, 10);
+    for (let i = 0; i < 10; i++) {
+      const purged: number = await ctx.runMutation(internal.usage.purgeOldUsage, {
+        beforeDay: usageCutoff,
+        limit: 1000,
+      });
+      if (purged < 1000) break;
     }
 
     // Shopper sessions (spec §92). Shortest retention of anything here:

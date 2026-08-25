@@ -31,6 +31,7 @@ const TENANT_OWNED = [
   "recommendationTraces",
   "shopperSessions",
   "merchantSessions",
+  "modelUsage",
 ] as const;
 
 async function seedFullTenant(
@@ -140,6 +141,18 @@ async function seedFullTenant(
       tokenHash: `hash_${publicKey}`,
       expiresAt: Date.now() + 1000,
       createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("modelUsage", {
+      tenantId,
+      day: new Date().toISOString().slice(0, 10),
+      operation: "judge",
+      model: "claude-sonnet-4-5",
+      calls: 1,
+      inputTokens: 100,
+      outputTokens: 50,
+      estimatedCostUsd: 0.001,
+      updatedAt: Date.now(),
     });
 
     return tenantId;

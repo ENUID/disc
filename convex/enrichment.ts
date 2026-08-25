@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -166,8 +167,8 @@ export const enrichBatch = internalAction({
   returns: v.object({ enriched: v.number(), remaining: v.number() }),
   handler: async (ctx, { tenantId, limit }) => {
     const apiKey = env("ANTHROPIC_API_KEY");
-    const text = reasoningProvider(apiKey, "fast");
-    const vision = visionProvider(apiKey);
+    const text = reasoningProvider(apiKey, "fast", usageSink(ctx, tenantId, "enrichment"));
+    const vision = visionProvider(apiKey, usageSink(ctx, tenantId, "vision"));
     const batchSize = limit ?? 25;
 
     const stale: Id<"products">[] = await ctx.runQuery(internal.enrichment.staleProductIds, {

@@ -21,6 +21,36 @@ export type ModelResponse = {
   outputTokens?: number;
 };
 
+/**
+ * Where a call's token usage is reported.
+ *
+ * Required, not optional, and that is the entire point. These counts
+ * were being read off every response and discarded, which made "what
+ * does an AI shopping session cost" unanswerable and every price tier a
+ * guess. An optional parameter would have been forgotten by the next
+ * call site; a required one cannot compile without someone deciding how
+ * the spend is attributed.
+ *
+ * Implementations must not throw — see `usageSink` in `usage.ts`. This
+ * runs inside the request that made the call, and accounting must never
+ * be the reason a shopper gets an error.
+ */
+export type UsageSink = (usage: {
+  model: string;
+  inputTokens?: number;
+  outputTokens?: number;
+}) => Promise<void>;
+
+/**
+ * A sink for calls that genuinely have no tenant to bill.
+ *
+ * Only two legitimate uses: tests, and the evaluation harness, which
+ * runs against a fixture catalog owned by nobody. Named rather than
+ * passed as an inline no-op so that using it is a visible decision in a
+ * diff, and so grepping for it lists every unattributed call in one go.
+ */
+export const UNATTRIBUTED: UsageSink = async () => {};
+
 export type ReasoningRequest = {
   system: string;
   user: string;
@@ -70,10 +100,12 @@ class AnthropicProvider implements ReasoningProvider, VisionProvider {
   readonly name: string;
   private apiKey: string;
   private model: string;
+  private sink: UsageSink;
 
-  constructor(apiKey: string, model: string) {
+  constructor(apiKey: string, model: string, sink: UsageSink) {
     this.apiKey = apiKey;
     this.model = model;
+    this.sink = sink;
     this.name = `anthropic:${model}`;
   }
 
@@ -107,13 +139,19 @@ class AnthropicProvider implements ReasoningProvider, VisionProvider {
       .map((block: { text: string }) => block.text)
       .join("");
 
-    return {
-      text,
+    const usage = {
       model: this.model,
-      promptVersion,
       inputTokens: payload.usage?.input_tokens,
       outputTokens: payload.usage?.output_tokens,
     };
+
+    // Reported here rather than by each caller: this is the only place
+    // that sees the token counts, and a caller that forgot would produce
+    // spend nobody can see. Awaited so the write is ordered, but the
+    // sink is contractually non-throwing.
+    await this.sink(usage);
+
+    return { text, promptVersion, ...usage };
   }
 
   async complete(request: ReasoningRequest): Promise<ModelResponse> {
@@ -182,19 +220,23 @@ export class NullReasoningProvider implements ReasoningProvider, VisionProvider 
  * Judging and ambiguous intent decide what a shopper sees, so they get
  * the stronger one. Both are overridable by env without a code change.
  */
-export function reasoningProvider(apiKey: string, tier: "fast" | "strong" = "fast") {
+export function reasoningProvider(
+  apiKey: string,
+  tier: "fast" | "strong",
+  sink: UsageSink,
+) {
   if (!apiKey) return new NullReasoningProvider();
   const model =
     tier === "strong"
       ? process.env.DISC_MODEL_STRONG || "claude-sonnet-4-5"
       : process.env.DISC_MODEL_FAST || "claude-haiku-4-5-20251001";
-  return new AnthropicProvider(apiKey, model);
+  return new AnthropicProvider(apiKey, model, sink);
 }
 
-export function visionProvider(apiKey: string): VisionProvider {
+export function visionProvider(apiKey: string, sink: UsageSink): VisionProvider {
   if (!apiKey) return new NullReasoningProvider();
   const model = process.env.DISC_MODEL_VISION || "claude-haiku-4-5-20251001";
-  return new AnthropicProvider(apiKey, model);
+  return new AnthropicProvider(apiKey, model, sink);
 }
 
 /**

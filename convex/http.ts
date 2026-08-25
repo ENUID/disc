@@ -4,12 +4,14 @@ import { internal, api } from "./_generated/api";
 import {
   randomToken,
   verifyShopifyOAuthHmac,
+  timingSafeEqual,
   verifyShopifyWebhookHmac,
   verifyStripeSignature,
 } from "./lib/crypto";
 import { encryptSecret } from "./lib/crypto";
 import { interpretStripeEvent } from "./lib/billing";
 import {
+  ADMIN_KEY,
   DASHBOARD_URL,
   ENCRYPTION_KEY,
   OAUTH_STATE_TTL_MS,
@@ -694,11 +696,18 @@ http.route({
 // ---------------------------------------------------------------------
 
 merchantRoute("/merchant/billing", async (ctx, tenantId) => {
-  const [plans, state] = await Promise.all([
+  const [plans, state, sessionsUsed] = await Promise.all([
     ctx.runQuery(internal.billing.plans, {}),
     ctx.runQuery(internal.billing.billingState, { tenantId }),
+    // The one usage number a merchant may see. Sessions — not tokens,
+    // not calls, not dollars (§79). It is also the unit plan limits
+    // should be written in, because it is the thing they are buying.
+    ctx.runQuery(internal.usage.sessionsUsed, {
+      tenantId,
+      since: Date.now() - 30 * 86400_000,
+    }),
   ]);
-  return { ...plans, state };
+  return { ...plans, state, sessionsUsed };
 });
 
 allowPreflight("/merchant/billing/checkout");
@@ -792,6 +801,53 @@ http.route({
       subscriptionId: outcome.subscriptionId ?? undefined,
     });
     return new Response("OK", { status: 200 });
+  }),
+});
+
+/**
+ * Unit economics. OPERATOR ONLY (spec §79).
+ *
+ * Deliberately outside `/merchant/*`: this shows every tenant's spend
+ * and margin next to each other, so a merchant session token must never
+ * be sufficient — and it is not, because this route does not consult
+ * one. It takes a separate operator key, and when that key is unset the
+ * route refuses rather than opening.
+ *
+ * No CORS preflight is registered, so no browser page on any merchant
+ * origin can call it.
+ */
+http.route({
+  path: "/admin/economics",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const expected = ADMIN_KEY();
+    // Refuse when unconfigured. A missing secret must mean "closed",
+    // never "no check to perform".
+    if (!expected) {
+      return new Response("Economics reporting is not configured", { status: 503 });
+    }
+
+    const header = request.headers.get("Authorization") ?? "";
+    const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!(timingSafeEqual(provided, expected))) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const url = new URL(request.url);
+    const days = Math.min(Math.max(Number(url.searchParams.get("days") ?? "30") || 30, 1), 365);
+    const since = Date.now() - days * 86400_000;
+
+    const report = await ctx.runQuery(internal.usage.economics, {
+      sinceDay: new Date(since).toISOString().slice(0, 10),
+      since,
+      limit: Math.min(Number(url.searchParams.get("limit") ?? "100") || 100, 500),
+    });
+
+    return new Response(JSON.stringify({ days, ...report }, null, 2), {
+      status: 200,
+      // No CORS headers: this is not for a browser on someone's origin.
+      headers: { "Content-Type": "application/json" },
+    });
   }),
 });
 

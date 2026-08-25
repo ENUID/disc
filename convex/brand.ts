@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -179,7 +180,11 @@ export const buildBrandBrain = internalAction({
       let summary = "";
       let confidence = 0.4; // deterministic-only baseline
 
-      const provider = reasoningProvider(env("ANTHROPIC_API_KEY"), "fast");
+      const provider = reasoningProvider(
+        env("ANTHROPIC_API_KEY"),
+        "fast",
+        usageSink(ctx, tenantId, "brand"),
+      );
       try {
         const response = await provider.complete({
           system: brandExtractSystem,

@@ -252,6 +252,27 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // Cost accounting goes too.
+    //
+    // Arguably it need not: it holds no shopper data and no merchant
+    // business data — it is our own infrastructure spend. But it is
+    // tenant-scoped, and `shop/redact` promises that a redacted shop
+    // leaves nothing behind. Keeping it would mean carving an exception
+    // into the deletion-completeness test, which is the guard that
+    // caught this table being forgotten in the first place.
+    //
+    // If retained economics across departed merchants is ever wanted, it
+    // should be a deliberate un-scoped aggregate written alongside this
+    // one — not an exception here.
+    for (;;) {
+      const batch = await ctx.db
+        .query("modelUsage")
+        .withIndex("by_tenant_and_day", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     const sessions = await ctx.db
       .query("merchantSessions")
       .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))

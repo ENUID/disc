@@ -129,6 +129,46 @@ export default defineSchema({
   }).index("by_key", ["key"]),
 
   /**
+   * What models actually cost us (spec §79, §86).
+   *
+   * The gap this closes: `providers.ts` has always read `input_tokens`
+   * and `output_tokens` off every response and thrown them away, so
+   * "what does an AI shopping session cost" was unanswerable — and
+   * every pricing tier was therefore a guess.
+   *
+   * ROLLED UP, NOT PER CALL. One row per tenant per day per operation
+   * per model, so a tenant costs on the order of 900 rows a month rather
+   * than one per model call. At the traffic this is meant to survive
+   * that is the difference between a table you can aggregate and one you
+   * cannot.
+   *
+   * RAW TOKENS, NOT JUST DOLLARS. Prices move and the rate table will be
+   * wrong at some point. Keeping the token counts means a rate
+   * correction re-derives history; keeping only the dollars would make
+   * every past figure permanently wrong.
+   */
+  modelUsage: defineTable({
+    tenantId: v.id("tenants"),
+    /** UTC "YYYY-MM-DD". The bucket. */
+    day: v.string(),
+    /** One of lib/model-pricing.ts OPERATIONS. */
+    operation: v.string(),
+    model: v.string(),
+
+    calls: v.number(),
+    inputTokens: v.number(),
+    outputTokens: v.number(),
+    /** Derived from the tokens above at write time; recomputable. */
+    estimatedCostUsd: v.number(),
+
+    updatedAt: v.number(),
+  })
+    // "<tenantId>:<day>:<operation>:<model>" — the bucket identity.
+    .index("by_key", ["tenantId", "day", "operation", "model"])
+    .index("by_tenant_and_day", ["tenantId", "day"])
+    .index("by_day", ["day"]),
+
+  /**
    * OAuth CSRF state. A table rather than the prototype's in-process
    * dict: that dict was never bounded (abandoned installs accumulated
    * for the process lifetime) and it broke outright with more than one

@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -118,7 +119,11 @@ export const resolveIntent = action({
     // 3. Escalate only the residue.
     let escalated = false;
     if (parsed.needsReasoning) {
-      const provider = reasoningProvider(env("ANTHROPIC_API_KEY"), "strong");
+      const provider = reasoningProvider(
+        env("ANTHROPIC_API_KEY"),
+        "strong",
+        usageSink(ctx, tenant.tenantId, "refine"),
+      );
       try {
         const response = await provider.complete({
           system: intentSystem,

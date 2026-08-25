@@ -55,6 +55,17 @@ export const ENCRYPTION_KEY = () => env("DISC_ENCRYPTION_KEY");
 export const STRIPE_WEBHOOK_SECRET = () => env("STRIPE_WEBHOOK_SECRET");
 
 /**
+ * Operator key for the internal economics report.
+ *
+ * Deliberately a separate credential from anything a merchant holds:
+ * that report shows every tenant's spend and margin side by side, so a
+ * merchant token must never reach it. Unset means the route is disabled
+ * outright rather than open — the failure mode for a missing secret is
+ * "no access", never "no check".
+ */
+export const ADMIN_KEY = () => env("DISC_ADMIN_KEY");
+
+/**
  * Shopify Admin API version.
  *
  * Pinned deliberately: Shopify ships quarterly versions and an unpinned
@@ -90,3 +101,16 @@ export const EVENT_RETENTION_DAYS = Number(env("DISC_EVENT_RETENTION_DAYS") || "
 export const SHOPPER_SESSION_RETENTION_DAYS = Number(
   env("DISC_SESSION_RETENTION_DAYS") || "30",
 );
+
+/**
+ * How long model-usage rollups are kept.
+ *
+ * Much longer than events, and deliberately so: this is the record that
+ * justifies a price, and answering "what did this cost us last year" is
+ * worth the storage. One row per tenant per day per operation per model
+ * is small enough that generosity here costs nothing.
+ *
+ * Holds no shopper data — it is token counts and dollar amounts — so it
+ * is not subject to the retention argument that governs `events`.
+ */
+export const USAGE_RETENTION_DAYS = Number(env("DISC_USAGE_RETENTION_DAYS") || "730");

@@ -13,6 +13,8 @@
  * is no conversion between embedding spaces.
  */
 
+import type { UsageSink } from "./providers";
+
 export type EmbeddingProvider = {
   readonly name: string;
   readonly dimensions: number;
@@ -29,9 +31,11 @@ class OpenAIEmbeddings implements EmbeddingProvider {
   // Explicit field rather than a parameter property — those emit
   // runtime code that Node's type-stripping test runner rejects.
   private apiKey: string;
+  private sink: UsageSink;
 
-  constructor(apiKey: string) {
+  constructor(apiKey: string, sink: UsageSink) {
     this.apiKey = apiKey;
+    this.sink = sink;
   }
 
   async embed(texts: string[]): Promise<number[][]> {
@@ -55,6 +59,17 @@ class OpenAIEmbeddings implements EmbeddingProvider {
     }
 
     const payload = await response.json();
+
+    // Embeddings are the cheapest thing here per call and the easiest to
+    // dismiss as free — but a query is embedded on every single /search,
+    // which is the one cost on that path that scales with traffic rather
+    // than with catalog size. Unmetered, it hides underneath ingestion.
+    await this.sink({
+      model: "text-embedding-3-small",
+      inputTokens: payload.usage?.prompt_tokens ?? payload.usage?.total_tokens ?? 0,
+      outputTokens: 0,
+    });
+
     // The API may return results out of order; `index` is authoritative.
     // Trusting array position here would mis-assign vectors to products,
     // which corrupts search silently rather than failing.
@@ -95,7 +110,10 @@ export class DeterministicEmbeddings implements EmbeddingProvider {
   }
 }
 
-export function getEmbeddingProvider(apiKey: string): EmbeddingProvider {
-  if (apiKey) return new OpenAIEmbeddings(apiKey);
+export function getEmbeddingProvider(
+  apiKey: string,
+  sink: UsageSink,
+): EmbeddingProvider {
+  if (apiKey) return new OpenAIEmbeddings(apiKey, sink);
   return new DeterministicEmbeddings();
 }

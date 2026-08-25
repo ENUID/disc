@@ -1,3 +1,4 @@
+import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -109,7 +110,14 @@ export const search = action({
       return { query: args.query, results: [], status: "syncing" };
     }
 
-    const provider = getEmbeddingProvider(env("OPENAI_API_KEY"));
+    // "query_embedding", not "embedding": /search calls no reasoning
+    // model, which makes it tempting to describe as free. It is not —
+    // this embed runs on every search, and it is the only cost on this
+    // path that scales with traffic rather than catalog size.
+    const provider = getEmbeddingProvider(
+      env("OPENAI_API_KEY"),
+      usageSink(ctx, tenant.tenantId, "query_embedding"),
+    );
     const [queryVector] = await provider.embed([args.query]);
 
     const limit = Math.min(args.limit ?? 12, 50);

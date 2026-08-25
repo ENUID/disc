@@ -60,6 +60,9 @@ Three records touch shopper behaviour:
   closed subset (a storefront cannot report `purchase` and inflate a
   merchant's revenue) and the payload is truncated to 20 keys of 200
   characters, one level deep (`sanitisePayload`, `convex/lib/events.ts`).
+- **`modelUsage`** — how many tokens Disc spent, per day, per operation,
+  per model. Cost accounting about Disc's own infrastructure; it carries
+  no query text, no product ids and no shopper reference of any kind.
 - **`recommendationTraces`** — what Disc recommended and why: the
   candidate set, the final set, the score components, and the prompt,
   model, ranker and schema versions in force. Contains no shopper
@@ -79,6 +82,7 @@ are not associated with a person.
 | Merchant sessions (dashboard login) | 14 days, then expired and swept | `MERCHANT_SESSION_TTL_MS` |
 | OAuth state | 10 minutes | `OAUTH_STATE_TTL_MS` |
 | Rate-limit counters | Swept after 24 hours | — |
+| AI usage rollups | 730 days | `DISC_USAGE_RETENTION_DAYS` |
 | Product catalog, profiles, Brand Brain | Life of the tenant | — |
 
 Enforced by the nightly `purgeExpired` cron (`convex/crons.ts`), which
@@ -108,8 +112,17 @@ targeting of any kind. A returning shopper is a new shopper.
   requests redaction** (`shop/redact`): `purgeTenant`
   (`convex/tenants.ts`) deletes every row the tenant owns — products,
   embeddings, product profiles, every Brand Brain version, events,
-  recommendation traces, shopper sessions, merchant sessions — and then
-  the tenant record itself, encrypted access token included.
+  recommendation traces, shopper sessions, merchant sessions, and the
+  AI usage rollups — and then the tenant record itself, encrypted access
+  token included.
+
+  The usage rollups are worth a note, because keeping them would be
+  defensible: they hold no shopper data and no merchant business data —
+  they are Disc's own infrastructure spend, the equivalent of an
+  invoice. They are deleted anyway, because they are tenant-scoped and
+  `shop/redact` promises that a redacted shop leaves nothing behind.
+  Retaining economics across departed merchants would need a separate,
+  un-scoped aggregate rather than an exception in the deletion path.
 - **`customers/data_request` and `customers/redact`**: acknowledged, and
   there is genuinely nothing to act on. Disc holds no customer PII, so
   there is no customer record to export or erase. These topics are
@@ -121,7 +134,7 @@ targeting of any kind. A returning shopper is a new shopper.
 first test reads the schema, finds every table carrying a `tenantId`,
 and fails if one is not in the deletion set — so a table added later and
 forgotten breaks the build instead of quietly outliving the shop that
-owned it. The remaining tests seed a tenant across all eight tables,
+owned it. The remaining tests seed a tenant across all nine tables,
 purge it, and assert that no row anywhere still carries its id, while a
 second tenant's rows are untouched.
 
