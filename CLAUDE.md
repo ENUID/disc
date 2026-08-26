@@ -80,23 +80,52 @@ CSS class prefixes, file names, log lines, comments. Never "Discern",
 "discern-widget", or any other spelling — that was an early working name
 and is wrong everywhere it appears now.
 
-## In-flight migration: Python/LanceDB -> Convex
+## The two backends: `/convex` is the product, `/backend` is history
 
-**Two backends exist in this repo right now. That is deliberate and
-temporary.** `Disc.md` is the target spec; `Disc audit.md` is the traced
-gap analysis; `/convex` is Phase 1 of closing it.
+**`/convex` is the real backend.** All 17 spec phases are implemented and
+tested — catalog ingestion, product intelligence, Brand Brain, intent,
+the decision engine, the Look Builder, billing, analytics, rate limiting
+and usage metering. It is **written and tested but not yet deployed**,
+because deploying needs a Convex project on the owner's account. Nothing
+about that is provisional: `Disc.md` is the spec and `Disc audit.md` is
+the traced gap analysis, and the gaps are closed.
 
-- `/backend` (FastAPI + LanceDB + fastembed) is **still the live one**.
-  Untouched, still passing its 52 checks. Do not delete it.
-- `/convex` is **written but not deployed** — it needs a Convex project,
-  which needs the owner's account. Nothing runs it yet.
+**`/backend` (FastAPI + LanceDB + fastembed) is the original prototype
+and is now dead weight.** It is superseded on every axis — it has no
+merchant/public credential split, no product intelligence layer, no
+Brand Brain, no outfit engine, no looks, and a confirmed injection bug in
+its product lookup. Nothing in the shipping path depends on it. It is
+still here only because deleting it has not been agreed; do not build
+against it, and do not treat its behaviour as the reference for
+anything.
 
 The widget talks to whichever backend its `apiUrl` points at: the Convex
 HTTP routes deliberately mirror the Python paths and response shapes
 (`POST /search`, `GET /product/{id}`, `GET /look/{id}`,
 `GET /sites/{key}/status`), so `frontend/disc-widget.js` needs no edits
-and its Playwright suites stay valid either way. That is what makes the
-cutover reversible.
+and its Playwright suites stay valid either way. That is what made the
+cutover reversible while it was in progress.
+
+### Known structural debt
+
+Named here rather than fixed, because the fixes were proposed and not yet
+agreed:
+
+- **`/backend`** — 2,685 lines of superseded Python, per above.
+- **`convex/http.ts` is ~1,000 lines.** The one genuine "giant api.ts" in
+  the repo: storefront routes, OAuth, Shopify webhooks, Stripe webhooks,
+  the merchant control plane, looks and admin all register in one file.
+  It is grouped by comment banner and would split cleanly into
+  `convex/routes/*`. `http.itest.ts` guards the duplicate-registration
+  failure that is the only real hazard in doing so.
+- **`frontend/disc-widget.js` is ~1,800 lines.** Everything the shopper
+  sees, in one file. Splitting it means adding a bundler to the most
+  fragile delivery path in the product — a script that runs on other
+  people's storefronts — so it is a real trade rather than an obvious win.
+
+Everything else already has one owner per responsibility: 15 Convex
+function modules averaging ~330 lines, and 25 pure-logic libraries under
+`convex/lib/`.
 
 **The security boundary the Python version lacks**, and the reason this
 phase came first:
@@ -134,14 +163,16 @@ ES modules.
 ## Architecture
 
 ```
-/backend
+/backend                    SUPERSEDED — the original prototype. Kept, not used.
+                            See "The two backends" above before touching any of it.
   ingest.py               -> builds the DEMO LanceDB table (backend/data/disc_lancedb) from
                               the 15-item sample catalog — used when no shop is registered,
                               e.g. this repo's own test.html
   server.py               -> FastAPI app: /search, signup, /embed.js, billing, webhooks
   db.py                   -> SQLite tenant registry (domain -> site key, sync + subscription state)
-  public_ingest.py        -> SHIPPING PATH: catalog ingestion via the storefront's public
-                              products.json — no OAuth, no credentials
+  public_ingest.py        -> catalog ingestion via the storefront's public products.json —
+                              no OAuth, no credentials. Was the shipping path; the Convex
+                              backend uses the Shopify Admin API instead.
   billing.py              -> Stripe plans, Checkout sessions, webhook signature verification
   multi_tenant_ingest.py  -> record shape + per-shop table writer, shared by both ingestion
                               sources; also the (dormant) Admin API fetch
