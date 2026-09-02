@@ -1,5 +1,14 @@
 # Disc — AI Boutique Widget
 
+> **Read `PRODUCT_DIRECTION.md` before starting a new phase.** It records
+> the agreed target architecture — Disc as a white-label AI shopping
+> layer inside the merchant's own storefront, with a first-class brand
+> content layer — and, importantly, what is *deferred* until the
+> reliability sequence finishes. This file describes the system as it is
+> today; that one describes where it is going and what must not break on
+> the way. Where they disagree about distribution, this file is the
+> current state and that one is the target.
+
 ## What this is
 
 Disc is a B2B product from Enuid Labs. Shopify merchants install a single
