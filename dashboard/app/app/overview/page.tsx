@@ -105,7 +105,7 @@ export default async function OverviewPage() {
         <div className="note warn">
           <strong>Disc is not on your storefront yet.</strong> Installing the app
           does not switch it on — Shopify app embeds start disabled.{" "}
-          <Link href="/app/experience">Open AI Boutique</Link> to enable it.
+          <Link href="/app/experience">Open Experience</Link> to enable it.
         </div>
       )}
 

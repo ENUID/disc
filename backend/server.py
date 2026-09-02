@@ -797,7 +797,7 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
 _SIGNUP_PAGE = """<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Disc — AI boutique for your store</title>
+<title>Disc — a personalized commerce layer for your store</title>
 <style>
   body { font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Inter", sans-serif;
          max-width: 640px; margin: 72px auto; padding: 0 24px; color: #141414; }
@@ -813,7 +813,7 @@ _SIGNUP_PAGE = """<!doctype html>
   .note { color: #777; font-size: 14px; }
 </style>
 <h1>Disc</h1>
-<div class="sub">A conversational AI boutique for your Shopify store.
+<div class="sub">An AI-native personalized commerce layer for your Shopify store.
   One line of code, no app install.</div>
 
 <input id="domain" placeholder="yourstore.com" autocomplete="url">

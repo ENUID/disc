@@ -1,5 +1,16 @@
 # DISC — HYPER-DEEP B2B MASTER BUILD SPEC
-## Shopify-native AI Boutique / Brand Brain / Fashion Decision Engine
+## Shopify-native personalized commerce layer / Brand Brain / Fashion Decision Engine
+
+> **This is the original implementation spec, kept as written.** Code
+> comments reference its section numbers (§29, §73, §133 …), so the body
+> is deliberately not rewritten. For the canonical product definition see
+> `README.md`: *an AI-native personalized commerce layer for fashion brands that
+> turns a Shopify store into a more personal shopping experience, helping
+> people discover, style, compare, and decide what to buy from the
+> brand's own catalog.* Where this file says "AI Boutique", read it as
+> the name this spec gave the shopper experience — not as Disc's
+> identity. Point 7 of §0 below already states the definition that
+> stuck.
 
 Repository: https://github.com/ENUID/disc.git
 Company: Enuid Labs
@@ -33,7 +44,10 @@ The engineering objective is NOT "more agents". It is better decisions, reliable
 
 # 1. CORE PRODUCT THESIS
 
-Disc is an AI commerce layer for fashion brands.
+Disc is an AI-native personalized commerce layer for fashion brands that
+turns a Shopify store into a more personal shopping experience, helping
+people discover, style, compare, and decide what to buy from the brand's
+own catalog.
 
 A precise internal definition:
 

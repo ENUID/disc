@@ -13,9 +13,15 @@ direction was given.
 
 ## The thesis
 
-Disc is **not** a standalone shopping application that happens to use a
-merchant's catalog. It is a **white-label AI shopping layer for Shopify
-fashion brands**.
+Disc is **an AI-native personalized commerce layer for fashion brands
+that turns a Shopify store into a more personal shopping experience,
+helping people discover, style, compare, and decide what to buy from the
+brand's own catalog.** (`README.md` is the source of truth for that
+definition.)
+
+It is **not** a standalone shopping application that happens to use a
+merchant's catalog. AI-native describes what the system is built out of;
+the product is the decision experience.
 
 The merchant keeps their storefront, branding, navigation, PDPs and
 checkout. Disc is a small branded entry point inside that storefront,
@@ -46,7 +52,7 @@ picked in code.
 
 | Layer | What it is | State today |
 | --- | --- | --- |
-| 1. Storefront runtime | The entry point and the full-screen experience | exists (`frontend/disc-widget.js`); **distribution must change** |
+| 1. Storefront runtime | The entry point and the full-screen experience | exists (`frontend/disc-widget.js`); the theme app extension exists too — what is missing is the merchant-controlled **entry point** and publication |
 | 2. Decision engine | intent → retrieval → constraints → assembly → ranking → judge → diversity → explanation | exists, correct, **keep** |
 | 3. Brand knowledge layer | catalog + product intelligence + Brand Brain + looks + **content** + relationships | partially exists; content is the gap |
 | 4. Merchant control plane | install, onboard, correct, manage content, analytics, billing, preview, activate | exists; needs a Content section |
@@ -81,7 +87,7 @@ Retained without rewrite. This is the valuable foundation:
 
 | Phase | Change | Builds on (do not reinvent) |
 | --- | --- | --- |
-| P2 | Shopify App Embed / Theme App Extension distribution, replacing the pasted script tag | the dormant OAuth app in `convex/shopify/`; the existing widget as runtime |
+| P2 | Publish the theme app extension, and implement the merchant-controlled entry point (`placement: "floating_button"` is declared and unimplemented) | `extensions/disc-boutique/`, which already exists; the OAuth app in `convex/shopify/`; the existing widget as runtime |
 | P3 | First-class `content` model — image, video, lookbook, editorial, social_post, social_video, article | the `looks` table's shape and its approval semantics |
 | P4 | Content → product graph, with explicit relationships | `lookEdges`; `purgeTenant` + the `privacy.itest.ts` schema guard |
 | P5 | Video ingestion, scene and timestamp mapping | durable jobs; `looks.imageStorageId` file-deletion handling |
@@ -149,15 +155,23 @@ and each is the kind of thing a new subsystem breaks by accident.
 
 Recorded now because each is cheaper to settle before P2 than during it.
 
-**P2 has a dependency P1.x does not.** `CLAUDE.md` documents the
-script-tag path as a deliberate call: App Store approval takes weeks, and
-Shopify requires a theme app extension for a listable app. Moving
-distribution to an App Embed therefore depends on a Shopify Partner
-account, an app registration, app review, a privacy policy URL and
-listing assets — external and slow. It also implies switching billing
-from Stripe to Shopify's Billing API (0% of the first $1M, 15% above),
-which changes the economics. None of that blocks P1.4–P1.6; all of it
-blocks P2. Worth starting the Partner registration in parallel.
+**P2 has a dependency P1.x does not.** *(Corrected after the P2 audit: an
+earlier version of this section said the App Embed had to be built. It
+already exists — `extensions/disc-boutique/` is a complete theme app
+extension, kept in sync by `npm run verify`. What follows is what is
+genuinely outstanding.)*
+
+**Publishing** it depends on a Shopify Partner account, an app
+registration, app review, a privacy policy URL and listing assets —
+external and slow. A listing also implies switching billing from Stripe
+to Shopify's Billing API (0% of the first $1M, 15% above), which changes
+the economics. None of that blocks P1.4–P1.6; all of it blocks a public
+launch. Worth starting the Partner registration in parallel.
+
+The one piece of P2 that is *code* is the entry point:
+`placement: "floating_button"` is a valid, merchant-settable, persisted
+config value that `frontend/disc-widget.js` never reads. See
+`PRODUCTION_P2_ARCHITECTURE.md`.
 
 **`looks` and `content` will overlap.** A look is an uploaded image with
 detected garments, merchant-confirmed product mappings and an approval

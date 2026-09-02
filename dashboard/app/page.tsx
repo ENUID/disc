@@ -47,8 +47,10 @@ export default async function Home({
           Connect your store
         </h1>
         <p style={{ color: "var(--ink-muted)", margin: "0 0 22px" }}>
-          Disc reads your catalog, learns your brand, and puts an AI boutique on
-          your storefront. Nothing appears to shoppers until you switch it on.
+          Disc reads your catalog, learns your brand, and adds a personalized
+          shopping experience to your storefront — helping shoppers discover,
+          style and decide, from your own catalog. Nothing appears to shoppers
+          until you switch it on.
         </p>
 
         {params.expired && (

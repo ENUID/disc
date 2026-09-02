@@ -54,7 +54,7 @@ const SECTIONS = [
   ["Looks", "/app/looks"],
   ["Brand", "/app/brand"],
   ["Catalog", "/app/catalog"],
-  ["AI Boutique", "/app/experience"],
+  ["Experience", "/app/experience"],
   ["Analytics", "/app/analytics"],
   ["Billing", "/app/billing"],
   ["Settings", "/app/settings"],

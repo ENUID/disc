@@ -24,7 +24,7 @@ const SECTIONS = [
   { href: "/app/brand", label: "Brand" },
   { href: "/app/catalog", label: "Catalog" },
   { href: "/app/looks", label: "Looks" },
-  { href: "/app/experience", label: "AI Boutique" },
+  { href: "/app/experience", label: "Experience" },
   { href: "/app/analytics", label: "Analytics" },
   { href: "/app/billing", label: "Billing" },
   { href: "/app/settings", label: "Settings" },

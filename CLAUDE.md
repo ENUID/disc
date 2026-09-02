@@ -1,31 +1,47 @@
-# Disc — AI Boutique Widget
+# Disc — engineering guide
+
+> **What Disc is, canonically:** an AI-native personalized commerce layer
+> for fashion brands that turns a Shopify store into a more personal
+> shopping experience, helping people discover, style, compare, and decide
+> what to buy from the brand's own catalog. `README.md` is the source of
+> truth for that definition; this file is how the system is built. Where a
+> comment or an older document calls Disc an "AI boutique", the README
+> wins: AI-native says what the system is built out of, not what it is
+> sold as.
 
 > **Read `PRODUCT_DIRECTION.md` before starting a new phase.** It records
-> the agreed target architecture — Disc as a white-label AI shopping
-> layer inside the merchant's own storefront, with a first-class brand
-> content layer — and, importantly, what is *deferred* until the
-> reliability sequence finishes. This file describes the system as it is
-> today; that one describes where it is going and what must not break on
-> the way. Where they disagree about distribution, this file is the
-> current state and that one is the target.
+> the agreed target architecture — Disc as a commerce layer inside the
+> merchant's own storefront, with a first-class brand content layer — and,
+> importantly, what is *deferred* until the reliability sequence
+> finishes. This file describes the system as it is today; that one
+> describes where it is going and what must not break on the way.
 
 ## What this is
 
-Disc is a B2B product from Enuid Labs. Shopify merchants install a single
-`<script>` tag and get a conversational **AI boutique**: a glass bar
-docked above their store that, once used, opens a full-screen shopping
-experience — editorial results, product detail with sizes and real
-add-to-cart, complete-the-look outfitting, and a saved-items list.
+Disc is a B2B product from Enuid Labs: an AI-native personalized commerce
+layer for fashion brands. It runs inside a merchant's existing Shopify
+store and helps shoppers discover, style, compare and decide, working
+only from that brand's own catalog. What the shopper sees is a docked bar that
+opens a full-screen experience — editorial results, product detail with
+sizes and real add-to-cart, complete-the-look outfitting, and a
+saved-items list.
 
-**Disc is sold direct, not through the Shopify App Store.** That was a
-deliberate call: building and getting an app approved takes weeks, and
-the self-serve path ships now. A merchant signs up on our own site, we
-read their catalog, they paste one line into their theme. Everything
-about how Disc reaches a storefront, identifies a tenant, and gets paid
-follows from that decision — see "Distribution" below. The Shopify OAuth
-app code is still here, unused but working, because it's the upgrade
-path once a listing exists; don't delete it, and don't wire the product
-to it without checking first.
+The merchant keeps their storefront, brand, product pages and checkout.
+Shopify stays the source of truth for price, currency, variants,
+availability and URLs; Disc adds inference *about* those products, in
+separate tables, plus the experience that helps someone choose.
+
+**Two distribution models exist in this repo, and the newer one is the
+target.** A theme app extension lives in `extensions/disc-boutique/` —
+an app embed block that identifies the store from
+`shop.permanent_domain`, so the merchant pastes nothing. It is built and
+kept in sync by `scripts/sync-extension-asset.mjs` (checked by
+`npm run verify`), but **not published**: that needs a Shopify Partner
+account, app registration and review. The older self-serve path — sign
+up on our own site, paste one `<script>` line into the theme — is what
+the "Distribution" section below describes, and it still works. Don't
+delete either without checking; see `PRODUCTION_P2_ARCHITECTURE.md` for
+what is actually outstanding.
 
 The shape of the experience is modelled on Brunello Cucinelli's "AI
 Online Boutique" (the reference the user supplied as a screen recording):
@@ -200,7 +216,7 @@ ES modules.
                        dormant_test.js  -> an inactive tenant must not cost a store its search
 /dashboard
   app/            -> the merchant console (spec §70-§76), Next.js App Router on Vercel.
-                     Overview, Brand, Catalog, Looks, AI Boutique, Analytics,
+                     Overview, Brand, Catalog, Looks, Experience, Analytics,
                      Billing, Settings.
   lib/api.ts      -> the ONLY place the merchant bearer token is read
   app/actions.ts  -> every state change, as server actions

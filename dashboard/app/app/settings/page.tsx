@@ -8,7 +8,7 @@ import { Card, Empty, PageHead, SubscriptionPill } from "@/components/ui";
  *
  * Thin on purpose. There is nothing to configure here that is not
  * configured better somewhere else — the experience controls live on the
- * AI Boutique page and the subscription lives in Stripe.
+ * Experience page and the subscription lives in Stripe.
  *
  * What this page is really for is answering "what does Disc have access
  * to, and what happens if I remove it" without the merchant having to
@@ -97,7 +97,7 @@ export default async function SettingsPage() {
       <Card>
         <p style={{ marginTop: 0, color: "var(--ink-muted)" }}>
           To stop Disc appearing to shoppers without losing anything, switch it
-          off under <Link href="/app/experience">AI Boutique</Link> — your
+          off under <Link href="/app/experience">Experience</Link> — your
           theme&rsquo;s own search box returns immediately and your catalog stays
           indexed.
         </p>

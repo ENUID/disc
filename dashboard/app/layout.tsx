@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Disc",
-  description: "The AI boutique for your Shopify store.",
+  description: "An AI-native personalized commerce layer for your Shopify store.",
   // A merchant console has no business being indexed, and the URL can
   // carry a session token on the first hop.
   robots: { index: false, follow: false },

@@ -14,4 +14,4 @@
 #   - a widget fix ships by `shopify app deploy`, touching no store
 
 type = "theme"
-name = "Disc AI Boutique"
+name = "Disc"

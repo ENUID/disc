@@ -1,5 +1,10 @@
 # DISC — REPOSITORY AUDIT
 
+> **Historical gap analysis against `Disc.md`, kept as written.** For the
+> canonical product definition see `README.md`. Where this file says
+> "AI Boutique", read it as the spec's name for the shopper experience,
+> not as Disc's identity.
+
 Audit of `ENUID/disc` @ `2f70d1f` against `Disc.md` (the master build spec).
 
 **No code was changed to produce this document.** Every claim below was

@@ -1,5 +1,5 @@
 /**
- * Disc — AI Boutique Widget
+ * Disc — storefront runtime
  * https://enuidlabs.com/disc
  *
  * One <script> tag turns a Shopify storefront's search into a full
@@ -114,7 +114,7 @@
       canvas: "#F4EEE9",
       ink: "#1D1D1F",
       serif: "'Canela', 'Didot', Georgia, 'Times New Roman', serif",
-      greeting: "Welcome to the AI Boutique",
+      greeting: "What are you looking for?",
       resultsHeading: "Get inspired by these creations",
       loadingMessages: ["Gathering inspiration", "Crafting your experience"],
       // A single continuous line drawn stroke-by-stroke while results are

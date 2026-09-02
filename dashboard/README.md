@@ -3,8 +3,10 @@
 The merchant-facing console (spec §70–§76). Next.js App Router, deployed
 to Vercel, talking to the Convex HTTP router.
 
-Seven sections, which are exactly the seven §70 names: Overview, Brand,
-Catalog, AI Boutique, Analytics, Billing, Settings.
+Seven sections: Overview, Brand, Catalog, Experience, Analytics, Billing,
+Settings. (§70 names the section that controls the shopper experience
+"AI Boutique"; it is called Experience here, because AI is how Disc works
+rather than what it is — see the repository README.)
 
 ## The one architectural rule
 

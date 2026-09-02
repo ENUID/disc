@@ -5,7 +5,7 @@ import { PreviewButton } from "@/components/actions";
 import { ExperienceForm } from "./form";
 
 /**
- * AI Boutique controls (spec §74).
+ * Shopper experience controls (spec §74).
  *
  * "Keep controls high-level" — so this is a short list of decisions
  * about behaviour, not a theme editor. §65 is the reason there is no
@@ -22,7 +22,7 @@ export default async function ExperiencePage() {
   if (!experience) {
     return (
       <>
-        <PageHead title="AI Boutique" />
+        <PageHead title="Experience" />
         <Empty>This store is no longer connected.</Empty>
       </>
     );
@@ -32,7 +32,7 @@ export default async function ExperiencePage() {
 
   return (
     <>
-      <PageHead title="AI Boutique">
+      <PageHead title="Experience">
         How Disc behaves on your storefront. Few controls on purpose — Disc is
         meant to be corrected, not configured.
       </PageHead>
