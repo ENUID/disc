@@ -169,6 +169,70 @@ export default defineSchema({
     .index("by_day", ["day"]),
 
   /**
+   * Durable job state (P1.1).
+   *
+   * The gap this closes: every background operation was
+   * `ctx.scheduler.runAfter(...)` fire-and-forget. There was no attempt
+   * count, no terminal failure state, no way to ask whether a tenant's
+   * enrichment was stuck, and no way to tell a job that failed *after*
+   * its writes from one that never ran. Progress was inferred from side
+   * effects, which works until you need to know why something stopped.
+   *
+   * THIS TABLE IS NOT A QUEUE. Convex's scheduler decides when work
+   * runs; a row here records what state that work is in. Nothing polls
+   * it looking for things to execute — a sweeper doing that would race
+   * the scheduler for the same job and rebuild, worse, a component the
+   * platform already provides.
+   *
+   * `idempotencyKey` is deliberately not the document id. The id is this
+   * execution record; the key is the logical piece of work. Two
+   * deliveries of one Shopify webhook are two invocations of one logical
+   * job, and must resolve to one row — that is what the webhook phase
+   * will depend on.
+   *
+   * The row is kept small on purpose: no payload field. A job's
+   * authoritative input lives in the domain tables it operates on, so
+   * there is exactly one copy of it and it cannot go stale.
+   */
+  jobs: defineTable({
+    tenantId: v.id("tenants"),
+    type: v.string(),
+
+    status: v.union(
+      v.literal("queued"),
+      v.literal("running"),
+      v.literal("succeeded"),
+      v.literal("retrying"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+
+    idempotencyKey: v.string(),
+
+    attempt: v.number(),
+    maxAttempts: v.number(),
+
+    scheduledAt: v.optional(v.number()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    /** Written by the retry phase. Nothing reads it yet. */
+    nextAttemptAt: v.optional(v.number()),
+
+    progress: v.optional(v.any()),
+    lastError: v.optional(v.string()),
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_tenant", ["tenantId"])
+    // Uniqueness of a logical job, per tenant. Leading with tenantId is
+    // what stops one merchant's key colliding with another's.
+    .index("by_tenant_and_idempotency", ["tenantId", "idempotencyKey"])
+    // Operator visibility: "what is stuck right now", across tenants.
+    .index("by_status", ["status"])
+    .index("by_tenant_and_status", ["tenantId", "status"]),
+
+  /**
    * OAuth CSRF state. A table rather than the prototype's in-process
    * dict: that dict was never bounded (abandoned installs accumulated
    * for the process lifetime) and it broke outright with more than one

@@ -280,6 +280,18 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // Job records. A purged tenant's in-flight work is cancelled by
+    // deletion rather than left as `running` rows pointing at a tenant
+    // that no longer exists.
+    for (;;) {
+      const batch = await ctx.db
+        .query("jobs")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     // Cost accounting goes too.
     //
     // Arguably it need not: it holds no shopper data and no merchant

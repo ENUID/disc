@@ -34,6 +34,7 @@ const TENANT_OWNED = [
   "modelUsage",
   "looks",
   "lookEdges",
+  "jobs",
 ] as const;
 
 async function seedFullTenant(
@@ -143,6 +144,17 @@ async function seedFullTenant(
       tokenHash: `hash_${publicKey}`,
       expiresAt: Date.now() + 1000,
       createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("jobs", {
+      tenantId,
+      type: "catalog_sync",
+      status: "queued",
+      idempotencyKey: `catalog_sync|${publicKey}`,
+      attempt: 0,
+      maxAttempts: 3,
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
     });
 
     await ctx.db.insert("modelUsage", {
