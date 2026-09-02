@@ -405,7 +405,10 @@ http.route({
     // install, so it must not fail the install.
     await registerWebhooks(shop, tokenData.access_token, PUBLIC_URL());
 
-    await ctx.scheduler.runAfter(0, internal.ingest.syncCatalog, { tenantId });
+    // Enqueued rather than scheduled directly, so a merchant who
+    // reinstalls twice in quick succession gets one first ingestion
+    // rather than two racing full catalog reads.
+    await ctx.runMutation(internal.scheduling.enqueueCatalogSync, { tenantId });
 
     const sessionToken = await ctx.runMutation(internal.auth.issueSession, { tenantId });
 
@@ -421,6 +424,23 @@ http.route({
 // Shopify webhooks. Raw body, verify, THEN parse — parse-then-verify
 // would mean a forged payload had already been interpreted.
 // ---------------------------------------------------------------------
+
+/**
+ * What makes one delivery of a product webhook distinct from a redelivery.
+ *
+ * Shopify's `updated_at` changes when and only when the product does, so
+ * two deliveries of one edit share it. Falling back to the payload id
+ * alone would make every edit of a product look like the same work and
+ * suppress real updates, so a missing timestamp falls back to something
+ * unique-per-delivery instead — losing dedupe is recoverable, losing an
+ * update is not.
+ */
+function productDiscriminator(payload: { updated_at?: unknown; id?: unknown }): string {
+  if (typeof payload.updated_at === "string" && payload.updated_at) {
+    return payload.updated_at;
+  }
+  return `nots-${Date.now()}`;
+}
 
 async function verifiedWebhook(
   request: Request,
@@ -459,9 +479,10 @@ http.route({
   path: "/webhooks/shopify/products/create",
   method: "POST",
   handler: shopifyWebhook(async (ctx, tenantId, payload) => {
-    await ctx.scheduler.runAfter(0, internal.ingest.syncSingleProduct, {
+    await ctx.runMutation(internal.scheduling.enqueueProductSync, {
       tenantId,
       shopifyProductId: String(payload.id),
+      discriminator: productDiscriminator(payload),
     });
   }),
 });
@@ -470,9 +491,15 @@ http.route({
   path: "/webhooks/shopify/products/update",
   method: "POST",
   handler: shopifyWebhook(async (ctx, tenantId, payload) => {
-    await ctx.scheduler.runAfter(0, internal.ingest.syncSingleProduct, {
+    // Shopify does not guarantee once-only delivery. Two deliveries of
+    // one edit carry the same `updated_at` and collapse to one job; a
+    // later genuine edit carries a new one and gets its own. P1.4
+    // replaces this with the event id, which is a stronger answer to
+    // the same question.
+    await ctx.runMutation(internal.scheduling.enqueueProductSync, {
       tenantId,
       shopifyProductId: String(payload.id),
+      discriminator: productDiscriminator(payload),
     });
   }),
 });
@@ -570,8 +597,19 @@ http.route({
     const limited = await rateLimited(ctx as MerchantCtx, "resync", String(tenantId));
     if (limited) return limited;
 
-    await ctx.scheduler.runAfter(0, internal.ingest.syncCatalog, { tenantId });
-    return json({ status: "queued" });
+    // Closes audit P2-1. The rate limit permits four resyncs an hour,
+    // and before this there was no concurrency guard at all: four clicks
+    // meant four concurrent full syncs, four times the Shopify reads and
+    // four times the embedding spend. Now they collapse to one job.
+    const enqueued = await ctx.runMutation(internal.scheduling.enqueueCatalogSync, {
+      tenantId,
+    });
+    return json({
+      status: "queued",
+      // Truthful about what happened: a merchant clicking twice should
+      // not be told two syncs started.
+      deduplicated: !enqueued.created,
+    });
   }),
 });
 

@@ -56,9 +56,13 @@ export const resyncStaleCatalogs = internalAction({
     });
 
     for (const tenant of due) {
-      // Scheduled rather than awaited: one slow or failing catalog must
-      // not stop the others in this sweep.
-      await ctx.scheduler.runAfter(0, internal.ingest.syncCatalog, {
+      // Enqueued rather than scheduled directly: `dueForResync` already
+      // excludes tenants mid-sync, but a merchant pressing Resync in the
+      // same window would otherwise race this sweep. One job either way.
+      //
+      // Still not awaited for its result — one slow or failing catalog
+      // must not stop the others in this sweep.
+      await ctx.runMutation(internal.scheduling.enqueueCatalogSync, {
         tenantId: tenant._id,
       });
     }

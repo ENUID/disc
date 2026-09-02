@@ -30,10 +30,16 @@ idempotent under duplicate delivery, no background work has a durable
 record, and the storefront fails open in the one direction it must never
 fail.**
 
-Severity counts: **2 P0**, **6 P1**, **6 P2**, **1 P3**.
+Severity counts: **2 P0**, **6 P1**, **7 P2**, **1 P3**.
 
 The two P0s are both in the widget, and both invert promises this repo
 documents elsewhere as guaranteed.
+
+**P2-7 was added after this audit was written**, during the P1.2
+call-site classification. It is left in place rather than folded in
+silently, with a note saying what the original pass got wrong — an audit
+that quietly absorbs its own misses stops being evidence of how much was
+actually checked.
 
 ---
 
@@ -304,6 +310,53 @@ The `by_tenant_and_a` / `by_tenant_and_b` indexes exist and are not used
 for this path. Correctness is fine; the cost is avoidable and grows with
 library size — i.e. it gets worse exactly as a merchant adopts the
 feature.
+
+---
+
+### P2-7 — The Brand Brain is rebuilt on a timer, not on change
+
+*Added during P1.2. The Phase 0 pass missed it: I classified
+`buildBrandBrain` as an orchestration continuation and did not follow the
+chain to what it writes.*
+
+Traced call path, all unconditional:
+
+```
+crons.interval("resync stale catalogs", 6h)   convex/crons.ts:24
+  -> resyncStaleCatalogs                       convex/crons.ts:48
+  -> syncCatalog                               convex/ingest.ts
+  -> drainEnrichment                           convex/ingest.ts:127
+  -> buildBrandBrain                           convex/crons.ts:101
+  -> saveBrain                                 convex/brand.ts:102
+```
+
+`ingest.ts:127` schedules the drain whether or not the sync changed
+anything. `crons.ts:101` runs when the backlog is empty, which for an
+unchanged catalog is the first pass. `saveBrain` demotes the current row
+and **inserts a new version unconditionally** — there is no comparison
+against the brain it is replacing.
+
+Two consequences, both proportional to tenant count rather than to
+merchant activity:
+
+- **Spend.** Each rebuild is a `reasoningProvider` call
+  (`convex/brand.ts:183`) attributed to the tenant. Four a day per
+  tenant, whether or not a single product changed.
+- **Storage.** `brandBrains` gains ~1,460 rows per tenant per year.
+  Nothing prunes old versions — deliberately, because
+  `recommendationTraces` reference them and must keep resolving — so the
+  table only shrinks when `purgeTenant` drops the tenant entirely.
+
+The version number is also merchant-visible, so a merchant who changed
+nothing still watches it climb, which makes it useless as a signal that
+anything happened.
+
+Not a correctness bug: a rebuilt brain is a valid brain, and §138's
+merchant-correction versioning depends on versions being cheap to create.
+The fix is a content check before `saveBrain` inserts — skip when the
+derived inputs are unchanged — plus a retention rule for `derived`
+versions no trace references. Both are behaviour changes to the brand
+path, so neither belongs in a scheduling phase.
 
 ---
 
