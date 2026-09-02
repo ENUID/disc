@@ -55,7 +55,7 @@ through the findings, so there is nothing to drift.
 | P1-1 nothing retries | closed | P1.3 — `PRODUCTION_RETRY_POLICY.md` |
 | P1-2 enrichment stalls 6h after a provider blip | **open** | `drainEnrichment` is an orchestration continuation and was deliberately not migrated in P1.2; it has no job and so no retry |
 | P1-3 `catalogHealth` full scans | open | P1.6 |
-| P1-4 no webhook idempotency | **partial** | P1.2 makes a redelivery a no-op via the idempotency key; event identity and ordering are P1.4 |
+| P1-4 no webhook idempotency, `sourceUpdatedAt` dead weight | closed | P1.4 — `PRODUCTION_WEBHOOKS.md`. Delivery dedupe on the webhook id, freshness on the resource version; `sourceUpdatedAt` is now read |
 | P1-5 Stripe events not deduplicated | open | P1.5 |
 | P1-6 no durable job state | closed | P1.1 — `PRODUCTION_JOB_STATE.md` |
 | P2-1 `/merchant/resync` no concurrency guard | closed | P1.2 — `PRODUCTION_IDEMPOTENCY.md` |

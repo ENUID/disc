@@ -104,6 +104,19 @@ export const JOB_STALE_RUNNING_MS = Number(
   env("DISC_JOB_STALE_MS") || String(15 * 60 * 1000),
 );
 
+/**
+ * How long the webhook delivery ledger is kept (P1.4).
+ *
+ * It only has to outlive Shopify's retry window, which is measured in
+ * days. Longer-term freshness is carried by `products.sourceUpdatedAt`
+ * for every product that still exists; the ledger's unique contribution
+ * is remembering deletes, and a delete older than this has long since
+ * been reconciled by the periodic catalog sweep.
+ */
+export const WEBHOOK_RETENTION_DAYS = Number(
+  env("DISC_WEBHOOK_RETENTION_DAYS") || "14",
+);
+
 /** Merchant session lifetime. */
 export const MERCHANT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 

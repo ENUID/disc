@@ -26,6 +26,7 @@ import {
   isValidShopDomain,
   registerWebhooks,
 } from "./shopify/admin";
+import { parseDeliveryHeaders } from "./lib/webhooks";
 
 /**
  * HTTP surface.
@@ -426,20 +427,31 @@ http.route({
 // ---------------------------------------------------------------------
 
 /**
- * What makes one delivery of a product webhook distinct from a redelivery.
+ * The resource version a product job is keyed on.
  *
  * Shopify's `updated_at` changes when and only when the product does, so
- * two deliveries of one edit share it. Falling back to the payload id
- * alone would make every edit of a product look like the same work and
- * suppress real updates, so a missing timestamp falls back to something
- * unique-per-delivery instead — losing dedupe is recoverable, losing an
- * update is not.
+ * two deliveries of one edit share it and collapse to one job. It is NOT
+ * the delivery identity — that is `X-Shopify-Webhook-Id`, handled by the
+ * ledger — and it is NOT the event identity, which is
+ * `X-Shopify-Event-Id` and is stored for correlation only.
+ *
+ * A missing timestamp falls back to something unique-per-delivery rather
+ * than to the product id: keying on the id alone would make every edit of
+ * a product look like the same work and permanently suppress real
+ * updates. Losing deduplication is recoverable, losing an update is not.
  */
 function productDiscriminator(payload: { updated_at?: unknown; id?: unknown }): string {
   if (typeof payload.updated_at === "string" && payload.updated_at) {
     return payload.updated_at;
   }
   return `nots-${Date.now()}`;
+}
+
+/** The payload's own `updated_at`, when it has one. */
+function resourceUpdatedAt(payload: { updated_at?: unknown }): string | undefined {
+  return typeof payload.updated_at === "string" && payload.updated_at
+    ? payload.updated_at
+    : undefined;
 }
 
 async function verifiedWebhook(
@@ -455,12 +467,30 @@ async function verifiedWebhook(
   return { shopDomain, payload: JSON.parse(new TextDecoder().decode(raw)) };
 }
 
+/**
+ * Verify, resolve the tenant, then hand the delivery to the ledger.
+ *
+ * The route decides only WHAT a topic means; `recordDelivery` decides
+ * whether this particular delivery should cause it. Routes therefore
+ * return an action rather than performing one — a route that did its own
+ * work would be doing it outside the deduplication and freshness checks,
+ * which is the shape of the bug this phase exists to remove.
+ *
+ * Ordering note: the ledger is written after the tenant is resolved, not
+ * before. A delivery for a shop Disc does not have causes no work in any
+ * case, so there is nothing to deduplicate, and keeping the table
+ * strictly tenant-scoped is what lets `purgeTenant` clear it and the
+ * privacy guard verify that it does.
+ */
 function shopifyWebhook(
-  handler: (ctx: any, shopDomain: string, payload: any) => Promise<void>,
+  toAction: (payload: any) => Record<string, unknown>,
+  topic: string,
 ) {
   return httpAction(async (ctx, request) => {
     const verified = await verifiedWebhook(request);
     if (!verified) return new Response("Unauthorized", { status: 401 });
+
+    const headers = parseDeliveryHeaders(request.headers);
 
     const tenant = await ctx.runQuery(internal.tenants.getByShopDomain, {
       shopDomain: verified.shopDomain,
@@ -469,58 +499,70 @@ function shopifyWebhook(
     // webhook for a tenant we do not have will never succeed.
     if (!tenant) return new Response("OK", { status: 200 });
 
-    await handler(ctx, tenant._id, verified.payload);
+    await ctx.runMutation(internal.webhooks.recordDelivery, {
+      tenantId: tenant._id,
+      webhookId: headers.webhookId ?? undefined,
+      // Correlation only. Never compared, never deduplicated on: one
+      // merchant action fans out to every subscribed topic, and treating
+      // the second delivery as a duplicate would drop a topic.
+      eventId: headers.eventId ?? undefined,
+      topic: headers.topic ?? topic,
+      triggeredAt: headers.triggeredAt,
+      resourceUpdatedAt: resourceUpdatedAt(verified.payload),
+      action: toAction(verified.payload),
+    });
+
     // Acknowledge fast (spec §91); real work is scheduled, not inline.
+    // A stale or duplicate delivery is also a 200 — Shopify retries a
+    // non-2xx, and both would still be stale or duplicate next time.
     return new Response("OK", { status: 200 });
   });
 }
 
+/**
+ * `products/create` and `products/update` are the same work.
+ *
+ * Deliberately identical handlers rather than one route: Shopify does not
+ * guarantee ordering across topics for one resource, so an `update` can
+ * arrive before the `create` it followed. Treating them differently would
+ * mean the arrival order changed the outcome. Both re-read the product
+ * from Shopify, so whichever lands first produces the correct state and
+ * the other is either deduplicated or found stale.
+ */
+const productChanged = (payload: any) => ({
+  kind: "product_sync" as const,
+  shopifyProductId: String(payload.id),
+  discriminator: productDiscriminator(payload),
+});
+
 http.route({
   path: "/webhooks/shopify/products/create",
   method: "POST",
-  handler: shopifyWebhook(async (ctx, tenantId, payload) => {
-    await ctx.runMutation(internal.scheduling.enqueueProductSync, {
-      tenantId,
-      shopifyProductId: String(payload.id),
-      discriminator: productDiscriminator(payload),
-    });
-  }),
+  handler: shopifyWebhook(productChanged, "products/create"),
 });
 
 http.route({
   path: "/webhooks/shopify/products/update",
   method: "POST",
-  handler: shopifyWebhook(async (ctx, tenantId, payload) => {
-    // Shopify does not guarantee once-only delivery. Two deliveries of
-    // one edit carry the same `updated_at` and collapse to one job; a
-    // later genuine edit carries a new one and gets its own. P1.4
-    // replaces this with the event id, which is a stronger answer to
-    // the same question.
-    await ctx.runMutation(internal.scheduling.enqueueProductSync, {
-      tenantId,
-      shopifyProductId: String(payload.id),
-      discriminator: productDiscriminator(payload),
-    });
-  }),
+  handler: shopifyWebhook(productChanged, "products/update"),
 });
 
 http.route({
   path: "/webhooks/shopify/products/delete",
   method: "POST",
-  handler: shopifyWebhook(async (ctx, tenantId, payload) => {
-    await ctx.runMutation(internal.products.deleteByShopifyId, {
-      tenantId,
+  handler: shopifyWebhook(
+    (payload) => ({
+      kind: "product_delete" as const,
       shopifyProductId: String(payload.id),
-    });
-  }),
+    }),
+    "products/delete",
+  ),
 });
 
 http.route({
   path: "/webhooks/shopify/app/uninstalled",
   method: "POST",
-  handler: shopifyWebhook(async (ctx, tenantId) => {
-    await ctx.runMutation(internal.tenants.purgeTenant, { tenantId });
-  }),
+  handler: shopifyWebhook(() => ({ kind: "purge_tenant" as const }), "app/uninstalled"),
 });
 
 // Mandatory GDPR topics. Disc stores no customer PII — only catalog
@@ -528,19 +570,17 @@ http.route({
 http.route({
   path: "/webhooks/shopify/customers/data_request",
   method: "POST",
-  handler: shopifyWebhook(async () => {}),
+  handler: shopifyWebhook(() => ({ kind: "acknowledge" as const }), "customers/data_request"),
 });
 http.route({
   path: "/webhooks/shopify/customers/redact",
   method: "POST",
-  handler: shopifyWebhook(async () => {}),
+  handler: shopifyWebhook(() => ({ kind: "acknowledge" as const }), "customers/redact"),
 });
 http.route({
   path: "/webhooks/shopify/shop/redact",
   method: "POST",
-  handler: shopifyWebhook(async (ctx, tenantId) => {
-    await ctx.runMutation(internal.tenants.purgeTenant, { tenantId });
-  }),
+  handler: shopifyWebhook(() => ({ kind: "purge_tenant" as const }), "shop/redact"),
 });
 
 // ---------------------------------------------------------------------

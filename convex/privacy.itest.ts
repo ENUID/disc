@@ -35,6 +35,7 @@ const TENANT_OWNED = [
   "looks",
   "lookEdges",
   "jobs",
+  "webhookDeliveries",
 ] as const;
 
 async function seedFullTenant(

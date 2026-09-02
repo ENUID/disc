@@ -169,6 +169,79 @@ export default defineSchema({
     .index("by_day", ["day"]),
 
   /**
+   * Shopify webhook delivery ledger (P1.4).
+   *
+   * Shopify guarantees neither once-only delivery nor ordering — a
+   * `products/update` can arrive before the `products/create` it
+   * followed — so a handler that simply applies what arrives will
+   * re-apply work it has already done and can overwrite newer state with
+   * older. This table answers the first of those two questions.
+   *
+   * IT DOES NOT ANSWER BOTH. Delivery identity and resource freshness are
+   * separate concerns and are kept separate here:
+   *
+   *   webhookId          unique per delivery   -> deduplication
+   *   eventId            one merchant action   -> correlation ONLY
+   *   triggeredAt        when it fired         -> ordering, no version
+   *   resourceUpdatedAt  the resource version  -> freshness
+   *
+   * `eventId` is deliberately NOT unique and deliberately NOT the dedupe
+   * key: one merchant action produces deliveries to every subscribed
+   * topic, and collapsing those would silently drop a topic.
+   *
+   * A duplicate delivery writes NO row — the row that already exists is
+   * the record of it. Storing one per redelivery would make a Shopify
+   * retry storm grow this table without adding information.
+   *
+   * This is not a second deduplication mechanism competing with job
+   * idempotency. They are layered, and each catches what the other
+   * cannot: the ledger stops a delivery being processed twice, the job
+   * key stops the same resource version becoming two jobs by different
+   * routes.
+   */
+  webhookDeliveries: defineTable({
+    tenantId: v.id("tenants"),
+
+    /** X-Shopify-Webhook-Id. Unique per delivery, per tenant. */
+    webhookId: v.string(),
+    /** X-Shopify-Event-Id. Correlation across subscriptions, never dedupe. */
+    eventId: v.optional(v.string()),
+    topic: v.string(),
+
+    /** The Shopify resource this concerns, when the topic has one. */
+    resourceId: v.optional(v.string()),
+    /** X-Shopify-Triggered-At, epoch ms. */
+    triggeredAt: v.optional(v.number()),
+    /** The payload's own `updated_at`, verbatim. */
+    resourceUpdatedAt: v.optional(v.string()),
+
+    /** The single comparable event time. See lib/webhooks.ts. */
+    eventAt: v.number(),
+    /**
+     * `eventAt` when this delivery was applied, 0 when it was not.
+     *
+     * The zero is what makes the freshness lookup O(1): the index below
+     * is walked descending and the first row is the newest APPLIED state,
+     * because unapplied rows sort below every real event time.
+     */
+    appliedEventAt: v.number(),
+
+    outcome: v.string(),
+    /** The durable job this delivery created, when it created one. */
+    jobId: v.optional(v.id("jobs")),
+    receivedAt: v.number(),
+  })
+    .index("by_tenant", ["tenantId"])
+    // Deduplication. Tenant-leading for the same reason every other index
+    // here is: one merchant's delivery id must not collide with another's.
+    .index("by_tenant_and_webhook", ["tenantId", "webhookId"])
+    // Freshness. Descending on this gives the last applied state for a
+    // resource in one read.
+    .index("by_tenant_and_resource", ["tenantId", "resourceId", "appliedEventAt"])
+    // Retention sweeping.
+    .index("by_received", ["receivedAt"]),
+
+  /**
    * Durable job state (P1.1).
    *
    * The gap this closes: every background operation was

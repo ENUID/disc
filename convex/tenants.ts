@@ -292,6 +292,18 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // The webhook delivery ledger. Deduplication state for a shop that
+    // no longer exists protects nothing, and `shop/redact` promises a
+    // redacted shop leaves nothing behind.
+    for (;;) {
+      const batch = await ctx.db
+        .query("webhookDeliveries")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     // Cost accounting goes too.
     //
     // Arguably it need not: it holds no shopper data and no merchant

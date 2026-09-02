@@ -9,6 +9,7 @@ import {
   RESYNC_INTERVAL_HOURS,
   SHOPPER_SESSION_RETENTION_DAYS,
   USAGE_RETENTION_DAYS,
+  WEBHOOK_RETENTION_DAYS,
 } from "./lib/env";
 
 /**
@@ -223,6 +224,20 @@ export const purgeExpired = internalAction({
         olderThan: sessionCutoff,
         limit: 1000,
       });
+      if (deleted < 1000) break;
+    }
+
+    // Webhook delivery ledger (P1.4). Deduplication only has to outlive
+    // Shopify's retry window; beyond that the row is history, and one
+    // row per delivery on a busy catalog is the fastest-growing table
+    // this phase adds.
+    const deliveryCutoff =
+      Date.now() - WEBHOOK_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 10; i++) {
+      const deleted: number = await ctx.runMutation(
+        internal.webhooks.purgeExpiredDeliveries,
+        { olderThan: deliveryCutoff, limit: 1000 },
+      );
       if (deleted < 1000) break;
     }
 
