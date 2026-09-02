@@ -200,6 +200,35 @@ async function main() {
     );
     check(state.errors.length === 0, "live tenant: no uncaught error", state.errors[0]);
 
+    // ---- P0.2: a hung backend must not hang the shopper ----
+    //
+    // The distinction that matters: a REFUSED connection fails fast on
+    // its own, so it proves nothing about timeouts. A backend that
+    // accepts the socket and then goes silent is the case where an
+    // unbounded fetch waits forever, and it is the realistic one — an
+    // overloaded deployment, a black-holed route, a captive portal.
+    console.log("── bounded execution");
+
+    mode = "hang";
+    const started = Date.now();
+    const hung = await observe(browser, ORIGIN, { settleMs: 6000 });
+    const elapsed = Date.now() - started;
+
+    check(hung.nativeVisible, "hung backend: native search stays visible");
+    check(!hung.barMounted, "hung backend: Disc does not attach");
+    // The boot budget is 3s. Observing for 6s and finding the page fully
+    // settled proves the request was abandoned rather than still open.
+    check(
+      elapsed < 20000,
+      "hung backend: the page settles rather than waiting forever",
+      `${elapsed}ms`,
+    );
+    check(
+      hung.pendingRequests === 0,
+      "hung backend: no request left in flight after the budget",
+      `${hung.pendingRequests} pending`,
+    );
+
     // ---- recovery ----
     console.log("── recovery");
 
@@ -239,11 +268,19 @@ async function main() {
  * A fresh context per case so no state — and no HTTP cache — carries
  * between them.
  */
-async function observe(browser, origin) {
+async function observe(browser, origin, opts = {}) {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 800 },
   });
   const page = await context.newPage();
+
+  // Track requests that never settle, so "bounded execution" is measured
+  // rather than assumed. A request Disc abandoned counts as finished:
+  // an aborted fetch fires requestfailed.
+  let pendingRequests = 0;
+  page.on("request", () => pendingRequests++);
+  page.on("requestfinished", () => pendingRequests--);
+  page.on("requestfailed", () => pendingRequests--);
 
   // Uncaught exceptions and unhandled rejections. These must be zero:
   // they are Disc failing to handle its own failure.
@@ -264,8 +301,9 @@ async function observe(browser, origin) {
 
   await page.goto(`${origin}/`, { waitUntil: "domcontentloaded" });
   // Long enough for the boot fetch plus several scanner ticks, so a
-  // late hide would be caught rather than raced past.
-  await page.waitForTimeout(2500);
+  // late hide would be caught rather than raced past. The hang case
+  // waits longer still, to see past the 3s config budget.
+  await page.waitForTimeout(opts.settleMs || 2500);
 
   const state = await page.evaluate(() => {
     const native = document.querySelector('input[name="q"]');
@@ -280,7 +318,7 @@ async function observe(browser, origin) {
   });
 
   await context.close();
-  return { ...state, errors };
+  return { ...state, errors, pendingRequests };
 }
 
 main().catch((error) => {

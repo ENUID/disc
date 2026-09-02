@@ -74,6 +74,36 @@
     scanIntervalMs: 500,
     debounceMs: 300,
     resultLimit: 12,
+
+    /**
+     * Hard deadlines, per operation, in milliseconds.
+     *
+     * Disc is an enhancement on someone else's storefront. An enhancement
+     * that hangs is worse than one that fails, because a failure shows a
+     * message the shopper can act on and a hang shows a spinner forever.
+     * Every network call it makes is bounded; none of them was before.
+     *
+     * The budgets differ because the consequences do:
+     *
+     *   config  — gates nothing and blocks nothing. If Disc cannot get a
+     *             fast answer about whether it should be here, the right
+     *             move is to stay out of the way and try next page view.
+     *   search  — a shopper is watching. Long enough for an embedding and
+     *             a vector search over a large catalog, not long enough
+     *             to sit through an incident.
+     *   product,
+     *   look    — secondary reads behind an interaction already in flight.
+     *   cart    — the merchant's OWN Shopify endpoint, and a commerce
+     *             action. A false failure here costs a sale, so it gets
+     *             the most room.
+     */
+    timeouts: {
+      config: 3000,
+      search: 12000,
+      product: 8000,
+      look: 8000,
+      cart: 15000,
+    },
   };
 
   // ---------------------------------------------------------------------
@@ -1052,8 +1082,49 @@
     return parts.length ? "?" + parts.join("&") : "";
   }
 
+  /**
+   * fetch with a hard deadline.
+   *
+   * One utility rather than an AbortController at each call site: five
+   * hand-rolled copies is five chances to forget the clearTimeout and
+   * leak a timer per request, and five places to fix when the policy
+   * changes.
+   *
+   * The timer is cleared on BOTH settle paths. Clearing only on success
+   * leaves an abort pending against a request that already failed, which
+   * on a slow connection fires into the next navigation.
+   *
+   * AbortController is assumed rather than feature-detected: every engine
+   * that ships `fetch` ships it, and the widget is already unusable
+   * without `fetch`.
+   */
+  function discFetch(url, options, timeoutMs) {
+    var controller = new AbortController();
+    var opts = Object.assign({}, options || {}, { signal: controller.signal });
+    var timedOut = false;
+    var timer = setTimeout(function () {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+
+    return fetch(url, opts).then(
+      function (res) {
+        clearTimeout(timer);
+        return res;
+      },
+      function (err) {
+        clearTimeout(timer);
+        // Distinguishable from a transport failure, so a caller that
+        // wants to say "this is taking too long" rather than "something
+        // went wrong" can. Every current caller treats both the same,
+        // which is fine — the point is that neither hangs.
+        throw timedOut ? new Error("Disc request timed out") : err;
+      }
+    );
+  }
+
   function fetchResults(query) {
-    return fetch(CONFIG.apiUrl + "/search", {
+    return discFetch(CONFIG.apiUrl + "/search", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1062,14 +1133,18 @@
         site_key: CONFIG.siteKey,
         shop: detectShop(),
       }),
-    }).then(function (res) {
+    }, CONFIG.timeouts.search).then(function (res) {
       if (!res.ok) throw new Error("Disc search failed: " + res.status);
       return res.json();
     });
   }
 
   function fetchProduct(id) {
-    return fetch(CONFIG.apiUrl + "/product/" + encodeURIComponent(id) + shopParam()).then(
+    return discFetch(
+      CONFIG.apiUrl + "/product/" + encodeURIComponent(id) + shopParam(),
+      null,
+      CONFIG.timeouts.product
+    ).then(
       function (res) {
         if (!res.ok) throw new Error("Disc product failed: " + res.status);
         return res.json();
@@ -1082,8 +1157,10 @@
     // does; the backend still caps this at one piece per category, so a
     // small catalog simply yields fewer pages.
     var sep = shopParam() ? "&" : "?";
-    return fetch(
-      CONFIG.apiUrl + "/look/" + encodeURIComponent(id) + shopParam() + sep + "limit=8"
+    return discFetch(
+      CONFIG.apiUrl + "/look/" + encodeURIComponent(id) + shopParam() + sep + "limit=8",
+      null,
+      CONFIG.timeouts.look
     ).then(
       function (res) {
         if (!res.ok) throw new Error("Disc look failed: " + res.status);
@@ -1098,11 +1175,11 @@
   // to, so it resolves as "demo" and the UI says so rather than pretending.
   function addToCart(variantId) {
     if (!detectShop()) return Promise.resolve("demo");
-    return fetch("/cart/add.js", {
+    return discFetch("/cart/add.js", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items: [{ id: variantId, quantity: 1 }] }),
-    }).then(function (res) {
+    }, CONFIG.timeouts.cart).then(function (res) {
       if (!res.ok) throw new Error("cart add failed");
       return "live";
     });
@@ -1807,7 +1884,7 @@
     // before hiding anything is what stops a lapsed or misconfigured
     // install from leaving a storefront with no search box at all —
     // worth one small request per page load.
-    fetch(url)
+    discFetch(url, null, CONFIG.timeouts.config)
       .then(function (res) {
         return res.ok ? res.json() : null;
       })
