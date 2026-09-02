@@ -54,7 +54,7 @@ through the findings, so there is nothing to drift.
 | P0-2 no request timeouts | closed | P0.2 |
 | P1-1 nothing retries | closed | P1.3 — `PRODUCTION_RETRY_POLICY.md` |
 | P1-2 enrichment stalls 6h after a provider blip | **open** | `drainEnrichment` is an orchestration continuation and was deliberately not migrated in P1.2; it has no job and so no retry |
-| P1-3 `catalogHealth` full scans | open | P1.6 |
+| P1-3 `catalogHealth` full scans | closed | P1.6 — `PRODUCTION_CATALOG_HEALTH.md`. Maintained counters plus a scheduled rebuild; no query returning a number reads a corpus |
 | P1-4 no webhook idempotency, `sourceUpdatedAt` dead weight | closed | P1.4 — `PRODUCTION_WEBHOOKS.md`. Delivery dedupe on the webhook id, freshness on the resource version; `sourceUpdatedAt` is now read |
 | P1-5 Stripe events not deduplicated, replay re-grants access | closed | P1.5 — `PRODUCTION_STRIPE_EVENTS.md`. Ledger on `event.id`; a state-machine guard replaces the ordering signal Stripe does not provide (**UNKNOWN** recorded there) |
 | P1-6 no durable job state | closed | P1.1 — `PRODUCTION_JOB_STATE.md` |

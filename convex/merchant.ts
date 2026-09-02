@@ -4,6 +4,7 @@ import { Doc } from "./_generated/dataModel";
 import { billingEnabled } from "./lib/env";
 import { isActive } from "./lib/tenancy";
 import { defaultWidgetConfig, parseWidgetConfig } from "./lib/widget-config";
+import { countsFrom } from "./lib/catalog-counts";
 
 /**
  * The merchant control plane (spec §70-§75).
@@ -114,52 +115,44 @@ export const overview = internalQuery({
 export const catalogHealth = internalQuery({
   args: { tenantId: v.id("tenants") },
   handler: async (ctx, { tenantId }) => {
-    const products = await ctx.db
-      .query("products")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
-      .collect();
-
-    const profiles = await ctx.db
-      .query("productProfiles")
-      .withIndex("by_tenant_and_product", (q) => q.eq("tenantId", tenantId))
-      .collect();
-    const profileByProduct = new Map(profiles.map((p) => [p.productId, p]));
-
-    const embeddings = await ctx.db
-      .query("productEmbeddings")
-      .withIndex("by_tenant_and_product", (q) => q.eq("tenantId", tenantId))
-      .collect();
-    const embedded = new Set(embeddings.map((e) => e.productId));
-
-    let enriched = 0;
-    let lowConfidence = 0;
-    let rejectedFields = 0;
-    let unavailable = 0;
-    let missingImages = 0;
-
-    for (const product of products) {
-      if (!product.anyVariantAvailable) unavailable++;
-      if (product.images.length === 0) missingImages++;
-
-      const profile = profileByProduct.get(product._id);
-      if (!profile) continue;
-      enriched++;
-      // Below half the attributes established: Disc will score most
-      // dimensions neutral for this product, which is worth surfacing
-      // rather than hiding behind an "enriched" tick.
-      if (profile.completeness < 0.5) lowConfidence++;
-      if ((profile.rejectedFields?.length ?? 0) > 0) rejectedFields++;
+    // ONE DOCUMENT READ. This function used to `.collect()` every
+    // product, every profile and every embedding for the tenant — and
+    // the embeddings are the fatal part, because a row carries 1,536
+    // float64 values (~12 KB) and this function's entire output is eight
+    // integers. A 5,000-product catalog read ~60 MB to count, past
+    // Convex's per-query read limit, so the dashboard broke for exactly
+    // the merchants paying the most.
+    //
+    // The counters are maintained transactionally at each lifecycle
+    // transition (see `catalog.ts`) and rebuilt from source rows by a
+    // scheduled reconciliation. NOTHING HERE MAY READ A VECTOR — the
+    // rule is that no query whose output is a number reads a corpus.
+    const tenant = await ctx.db.get(tenantId);
+    if (!tenant) {
+      return {
+        total: 0,
+        indexed: 0,
+        enriched: 0,
+        notEnriched: 0,
+        lowConfidence: 0,
+        rejectedFields: 0,
+        unavailable: 0,
+        missingImages: 0,
+      };
     }
 
+    const counts = countsFrom(tenant);
     return {
-      total: products.length,
-      indexed: products.filter((p) => embedded.has(p._id)).length,
-      enriched,
-      notEnriched: products.length - enriched,
-      lowConfidence,
-      rejectedFields,
-      unavailable,
-      missingImages,
+      total: counts.productCount,
+      indexed: counts.embeddedCount,
+      enriched: counts.enrichedCount,
+      // Clamped: drift must never render as a negative on a merchant's
+      // dashboard. Reconciliation is what actually corrects it.
+      notEnriched: Math.max(0, counts.productCount - counts.enrichedCount),
+      lowConfidence: counts.lowConfidenceCount,
+      rejectedFields: counts.rejectedFieldsCount,
+      unavailable: counts.unavailableCount,
+      missingImages: counts.missingImagesCount,
     };
   },
 });

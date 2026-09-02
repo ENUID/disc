@@ -2,6 +2,8 @@ import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { bumpCounts } from "./catalog";
+import { profileDelta } from "./lib/catalog-counts";
 import { Doc, Id } from "./_generated/dataModel";
 import { env } from "./lib/env";
 import { enrichmentCacheKey } from "./lib/enrichment-cache";
@@ -111,6 +113,16 @@ export const saveProfile = internalMutation({
 
     if (existing) await ctx.db.patch(existing._id, doc);
     else await ctx.db.insert("productProfiles", doc);
+
+    // A REPLACEMENT IS NOT A NO-OP for the counters (P1.6).
+    // `enrichedCount` is unchanged — the product was already enriched —
+    // but `completeness` can cross the confidence threshold in either
+    // direction and `rejectedFields` can appear or clear. Treating
+    // replacement as "nothing changed" would let those two drift on
+    // every re-enrichment. Re-running the same enrichment produces
+    // identical values and therefore a zero delta, which is what makes
+    // a retried job harmless.
+    await bumpCounts(ctx, args.tenantId, profileDelta(existing ?? null, doc));
     return null;
   },
 });

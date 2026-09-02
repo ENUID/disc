@@ -77,7 +77,35 @@ export default defineSchema({
     stripeCustomerId: v.optional(v.string()),
     stripeSubscriptionId: v.optional(v.string()),
 
+    /**
+     * Maintained catalog aggregates (P1.6).
+     *
+     * `catalogHealth` used to compute these by collecting every product,
+     * profile and embedding for the tenant. The embeddings are the fatal
+     * part: ~12 KB per row, so a 5,000-product catalog read ~60 MB to
+     * produce eight numbers, past Convex's per-query read limit — broken
+     * for exactly the merchants paying the most.
+     *
+     * These are updated transactionally at each lifecycle transition, so
+     * the dashboard reads one document instead of a corpus. They can
+     * drift — a bug, or an interrupted historical state — which is why
+     * `reconcileCatalogCounts` rebuilds them from authoritative product
+     * and profile rows on a schedule, never on a request.
+     *
+     * All optional so a tenant row written before this phase reads as
+     * zero rather than failing, and is corrected on the next
+     * reconciliation.
+     */
     productCount: v.number(),
+    unavailableCount: v.optional(v.number()),
+    missingImagesCount: v.optional(v.number()),
+    embeddedCount: v.optional(v.number()),
+    enrichedCount: v.optional(v.number()),
+    lowConfidenceCount: v.optional(v.number()),
+    rejectedFieldsCount: v.optional(v.number()),
+    /** When the counters were last rebuilt from source rows. */
+    catalogCountsAt: v.optional(v.number()),
+
     lastSyncedAt: v.optional(v.number()),
     catalogError: v.optional(v.string()),
 
@@ -464,6 +492,18 @@ export default defineSchema({
 
     sourceUpdatedAt: v.optional(v.string()),
     ingestedAt: v.number(),
+    /**
+     * When this product's embedding was last written (P1.6).
+     *
+     * A marker on the small row, not a join to the big one. Catalog
+     * health needs to know how many products are indexed, and reading
+     * `productEmbeddings` to answer that means materialising a 1,536-
+     * dimension vector per product — ~60 MB on a 5,000-product catalog,
+     * to produce a count. This field is what lets both the maintained
+     * counter and the reconciliation rebuild answer it without ever
+     * touching a vector.
+     */
+    embeddedAt: v.optional(v.number()),
   })
     .index("by_tenant", ["tenantId"])
     .index("by_tenant_and_shopify_id", ["tenantId", "shopifyProductId"])

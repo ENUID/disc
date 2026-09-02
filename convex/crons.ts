@@ -47,6 +47,24 @@ crons.interval(
   {},
 );
 
+/**
+ * Rebuild catalog aggregates (P1.6).
+ *
+ * The counters `catalogHealth` reads are maintained transactionally, but
+ * a maintained counter is the kind of thing that goes wrong quietly — a
+ * bug in a lifecycle path, or state written before this phase existed.
+ * This rebuilds them from authoritative product and profile rows.
+ *
+ * Deliberately NOT on the dashboard request path: putting it there would
+ * reintroduce the scan this phase removed.
+ */
+crons.daily(
+  "reconcile catalog counts",
+  { hourUTC: 4, minuteUTC: 0 },
+  internal.crons.reconcileCatalogCounts,
+  {},
+);
+
 // Cheap sweeps; these tables would otherwise grow forever.
 crons.daily(
   "purge expired sessions",
@@ -178,6 +196,43 @@ export const recoverStuckJobs = internalAction({
         errorClass: "stalled",
         message: `Execution stopped reporting after attempt ${job.attempt}`,
       });
+    }
+    return null;
+  },
+});
+
+/**
+ * Rebuild the tenants whose counters were rebuilt longest ago.
+ *
+ * Bounded per run rather than sweeping everything: a rebuild walks a
+ * tenant's whole product set, and doing every tenant in one nightly
+ * action is the same shape of unbounded work this phase removed from the
+ * dashboard. Tenants missed tonight are the oldest tomorrow.
+ */
+export const reconcileCatalogCounts = internalAction({
+  args: { limit: v.optional(v.number()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const tenantIds: Array<Id<"tenants">> = await ctx.runQuery(
+      internal.catalog.staleCountTenants,
+      { limit: args.limit ?? 10 },
+    );
+
+    for (const tenantId of tenantIds) {
+      // One tenant failing must not stop the sweep — the same reasoning
+      // as the resync fanout.
+      try {
+        await ctx.runAction(internal.catalog.reconcileTenant, { tenantId });
+      } catch (err) {
+        console.log(
+          JSON.stringify({
+            scope: "catalog",
+            event: "reconcile_failed",
+            tenantId,
+            error: (err as Error).message.slice(0, 200),
+          }),
+        );
+      }
     }
     return null;
   },

@@ -58,51 +58,69 @@ async function seedProduct(
     rejectedFields?: string[];
   },
 ) {
-  await t.run(async (ctx) => {
-    const productId = await ctx.db.insert("products", {
+  // Driven through the REAL lifecycle mutations rather than by inserting
+  // rows (P1.6). Catalog health now reads maintained counters, so a
+  // fixture that writes rows directly would be testing a state the
+  // product can never actually be in — and would pass while the
+  // counter-maintaining paths were broken.
+  await t.mutation(internal.products.upsertBatch, {
+    tenantId,
+    products: [
+      {
+        shopifyProductId: opts.id,
+        title: opts.id,
+        description: "d",
+        handle: opts.id,
+        productType: "Tops",
+        vendor: "Acme",
+        tags: [],
+        price: 100,
+        currency: "GBP",
+        imageUrl: opts.images?.[0] ?? "https://cdn/a.jpg",
+        images: opts.images ?? ["https://cdn/a.jpg"],
+        colour: "",
+        variants: [
+          { id: "v1", title: "M", price: 100, available: opts.available ?? true },
+        ],
+        anyVariantAvailable: opts.available ?? true,
+      },
+    ],
+  });
+
+  const productId: Id<"products"> = (
+    await t.query(internal.products.getByShopifyId, {
       tenantId,
       shopifyProductId: opts.id,
-      title: opts.id,
-      description: "d",
-      handle: opts.id,
-      productType: "Tops",
-      vendor: "Acme",
-      tags: [],
-      price: 100,
-      currency: "GBP",
-      imageUrl: opts.images?.[0] ?? "https://cdn/a.jpg",
-      images: opts.images ?? ["https://cdn/a.jpg"],
-      colour: "",
-      variants: [{ id: "v1", title: "M", price: 100, available: opts.available ?? true }],
-      anyVariantAvailable: opts.available ?? true,
-      ingestedAt: Date.now(),
+    })
+  )!._id;
+
+  if (opts.embedded !== false) {
+    await t.mutation(internal.products.saveEmbeddings, {
+      tenantId,
+      model: "test",
+      entries: [
+        {
+          productId,
+          embedding: new Array(1536).fill(0),
+          contentHash: opts.id,
+        },
+      ],
     });
+  }
 
-    if (opts.embedded !== false) {
-      await ctx.db.insert("productEmbeddings", {
-        tenantId,
-        productId,
-        embedding: new Array(1536).fill(0),
-        embeddingModel: "test",
-        contentHash: opts.id,
-        createdAt: Date.now(),
-      });
-    }
+  if (opts.enriched) {
+    await t.mutation(internal.enrichment.saveProfile, {
+      tenantId,
+      productId,
+      profile: emptyProfile(),
+      provenance: {},
+      completeness: opts.completeness ?? 0.9,
+      cacheKey: opts.id,
+      rejectedFields: opts.rejectedFields ?? [],
+    });
+  }
 
-    if (opts.enriched) {
-      await ctx.db.insert("productProfiles", {
-        tenantId,
-        productId,
-        profile: emptyProfile(),
-        provenance: {},
-        completeness: opts.completeness ?? 0.9,
-        cacheKey: opts.id,
-        schemaVersion: "profile_v1",
-        lastEnrichedAt: Date.now(),
-        rejectedFields: opts.rejectedFields,
-      });
-    }
-  });
+  return productId;
 }
 
 describe("onboarding progress is derived from real state (spec §18)", () => {
