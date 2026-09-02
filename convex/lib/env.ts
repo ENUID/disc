@@ -117,6 +117,19 @@ export const WEBHOOK_RETENTION_DAYS = Number(
   env("DISC_WEBHOOK_RETENTION_DAYS") || "14",
 );
 
+/**
+ * How long the Stripe event ledger is kept (P1.5).
+ *
+ * Longer than the Shopify one, and for a specific reason: Stripe permits
+ * a manual resend of an event for up to 30 days from the dashboard and
+ * the CLI. A ledger that has forgotten an event cannot deduplicate its
+ * replay, and a replayed `checkout.session.completed` is exactly the
+ * event that re-grants access. 45 days leaves margin over that window.
+ */
+export const STRIPE_EVENT_RETENTION_DAYS = Number(
+  env("DISC_STRIPE_EVENT_RETENTION_DAYS") || "45",
+);
+
 /** Merchant session lifetime. */
 export const MERCHANT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 

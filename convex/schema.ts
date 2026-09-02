@@ -169,6 +169,63 @@ export default defineSchema({
     .index("by_day", ["day"]),
 
   /**
+   * Stripe event ledger (P1.5).
+   *
+   * A replay of a Stripe event previously re-granted access: nothing
+   * recorded which events had been applied, so re-sending a
+   * `checkout.session.completed` from the Stripe dashboard — a
+   * one-click operation — re-entitled a cancelled merchant.
+   *
+   * `eventId` is the deduplication identity, on Stripe's own advice:
+   * "Track event IDs to identify duplicate deliveries". Note what is
+   * NOT here — no ordering timestamp. Stripe records `created` in whole
+   * seconds, says distinct events can share one, and states plainly that
+   * it must not be used to determine order. It is stored for audit and
+   * never compared. Ordering safety comes from the state machine in
+   * `lib/billing.ts` instead. See PRODUCTION_STRIPE_EVENTS.md.
+   *
+   * `tenantId` is optional because an event can arrive that resolves to
+   * no tenant — junk metadata, or a tenant already purged. Those rows
+   * are not tenant data and are aged out by retention rather than by
+   * `purgeTenant`, which handles the resolved ones.
+   */
+  stripeEvents: defineTable({
+    /** Stripe's `evt_...`. The deduplication key. */
+    eventId: v.string(),
+    eventType: v.string(),
+
+    /** Resolved tenant, when the event named one that exists. */
+    tenantId: v.optional(v.id("tenants")),
+    /** What the metadata actually said, kept even when it resolved to nothing. */
+    claimedTenantId: v.optional(v.string()),
+
+    stripeCustomerId: v.optional(v.string()),
+    stripeSubscriptionId: v.optional(v.string()),
+
+    /**
+     * applied            changed subscription state
+     * ignored_unhandled  an event type Disc does not act on
+     * ignored_unresolved no tenant could be safely resolved
+     * ignored_stale      refused by the transition guard
+     */
+    outcome: v.string(),
+    /** The status written, when one was. */
+    appliedStatus: v.optional(v.string()),
+    /** Why it was refused, for the ignored_stale case. */
+    reason: v.optional(v.string()),
+
+    /** Stripe's `event.created`. AUDIT ONLY — never used for ordering. */
+    eventCreated: v.optional(v.number()),
+    receivedAt: v.number(),
+  })
+    // Deduplication. Stripe event ids are globally unique, so unlike the
+    // Shopify ledger this is not tenant-scoped — the tenant is a result
+    // of processing the event, not an input to identifying it.
+    .index("by_event_id", ["eventId"])
+    .index("by_tenant", ["tenantId"])
+    .index("by_received", ["receivedAt"]),
+
+  /**
    * Shopify webhook delivery ledger (P1.4).
    *
    * Shopify guarantees neither once-only delivery nor ordering — a

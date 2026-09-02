@@ -292,6 +292,18 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // The Stripe event ledger. Rows that never resolved to a tenant are
+    // not tenant data and are aged out by retention instead; these are
+    // the ones that did.
+    for (;;) {
+      const batch = await ctx.db
+        .query("stripeEvents")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     // The webhook delivery ledger. Deduplication state for a shop that
     // no longer exists protects nothing, and `shop/redact` promises a
     // redacted shop leaves nothing behind.

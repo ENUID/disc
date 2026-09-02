@@ -9,7 +9,9 @@ import {
   verifyStripeSignature,
 } from "./lib/crypto";
 import { encryptSecret } from "./lib/crypto";
-import { interpretStripeEvent } from "./lib/billing";
+// Interpretation moved into `recordStripeEvent` in P1.5: it has to
+// happen in the same transaction as the deduplication check, so the
+// route now only verifies and hands off.
 import {
   ADMIN_KEY,
   DASHBOARD_URL,
@@ -1025,20 +1027,23 @@ http.route({
       return new Response("Malformed body", { status: 400 });
     }
 
-    const outcome = interpretStripeEvent(event);
-    // 200 on an event we don't act on: Stripe retries non-2xx, and
-    // retrying an event we deliberately ignore never succeeds.
-    if (!outcome.handled || !outcome.tenantId) {
-      return new Response("OK", { status: 200 });
-    }
+    // The event id is the deduplication identity, on Stripe's own
+    // advice. An event without one cannot be deduplicated and is
+    // refused rather than applied: unlike a Shopify delivery, a Stripe
+    // event that cannot be identified is one that could be replayed to
+    // re-grant access, which is the failure this phase exists to close.
+    const eventId =
+      event && typeof event === "object" && typeof (event as { id?: unknown }).id === "string"
+        ? (event as { id: string }).id
+        : null;
+    if (!eventId) return new Response("Missing event id", { status: 400 });
 
-    await ctx.runMutation(internal.billing.applyStripeEvent, {
-      tenantId: outcome.tenantId,
-      subscriptionStatus: outcome.subscriptionStatus,
-      plan: outcome.plan ?? undefined,
-      customerId: outcome.customerId ?? undefined,
-      subscriptionId: outcome.subscriptionId ?? undefined,
-    });
+    // Deduplication, interpretation, tenant resolution, the transition
+    // guard and the state change all happen in ONE mutation — see
+    // `recordStripeEvent`. A duplicate, an unhandled type, an
+    // unresolvable tenant and a refused transition are all 200: Stripe
+    // retries non-2xx, and each of these stays the same on redelivery.
+    await ctx.runMutation(internal.billing.recordStripeEvent, { eventId, event });
     return new Response("OK", { status: 200 });
   }),
 });

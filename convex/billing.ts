@@ -5,6 +5,8 @@ import { Doc } from "./_generated/dataModel";
 import {
   createCheckoutSession,
   createPortalSession,
+  guardStripeTransition,
+  interpretStripeEvent,
   PLANS,
   planForCatalog,
   TRIAL_DAYS,
@@ -190,6 +192,165 @@ export const applyStripeEvent = internalMutation({
       updatedAt: Date.now(),
     });
     return true;
+  },
+});
+
+/**
+ * Record a verified Stripe event and act on it exactly once (P1.5).
+ *
+ * ONE MUTATION DOES THE WHOLE DECISION:
+ *
+ *   dedupe -> interpret -> resolve tenant -> guard -> apply -> record
+ *
+ * The asymmetry that forces this, same as the Shopify ledger in P1.4:
+ *
+ *   ledger written, state not applied
+ *     -> Stripe's retry is deduplicated and the billing change is lost
+ *        FOREVER. A merchant pays and never gets access, or cancels and
+ *        keeps it.
+ *
+ *   state applied, ledger not written
+ *     -> Stripe's retry re-applies the same state. Harmless, because
+ *        applying a status twice is the same as applying it once.
+ *
+ * Those are not symmetric, and only the first is unrecoverable. In one
+ * Convex transaction neither can happen.
+ *
+ * `applyStripeEvent` remains the ONLY place that changes cached
+ * subscription state — this decides *whether* to call it, and calls it
+ * inside the same transaction.
+ */
+export const recordStripeEvent = internalMutation({
+  args: {
+    eventId: v.string(),
+    /** The parsed event. Verified by signature before it reaches here. */
+    event: v.any(),
+  },
+  returns: v.object({
+    outcome: v.string(),
+    duplicate: v.boolean(),
+    reason: v.optional(v.string()),
+  }),
+  handler: async (ctx, args) => {
+    // ---------------------------------------------------------------
+    // 1. DEDUPLICATION, on Stripe's own advice: track event ids.
+    // ---------------------------------------------------------------
+    const seen = await ctx.db
+      .query("stripeEvents")
+      .withIndex("by_event_id", (q) => q.eq("eventId", args.eventId))
+      .unique();
+
+    if (seen) {
+      // No second row and no second transition. This is the replay that
+      // previously re-granted access: re-sending an event from the
+      // Stripe dashboard is one click.
+      return { outcome: seen.outcome, duplicate: true, reason: seen.reason };
+    }
+
+    const receivedAt = Date.now();
+    const rawEvent = args.event as Record<string, unknown>;
+    const eventType = typeof rawEvent?.type === "string" ? rawEvent.type : "unknown";
+    // Stored for audit only. Stripe records this in whole seconds, says
+    // distinct events can share one, and states it must not be used to
+    // determine order — so nothing compares it.
+    const eventCreated =
+      typeof rawEvent?.created === "number" ? rawEvent.created : undefined;
+
+    const outcome = interpretStripeEvent(args.event);
+
+    const base = {
+      eventId: args.eventId,
+      eventType,
+      claimedTenantId: outcome.tenantId ?? undefined,
+      stripeCustomerId: outcome.customerId ?? undefined,
+      stripeSubscriptionId: outcome.subscriptionId ?? undefined,
+      eventCreated,
+      receivedAt,
+    };
+
+    // ---------------------------------------------------------------
+    // 2. Events Disc does not act on stay harmless — recorded, never
+    //    interpreted speculatively, never retried forever.
+    // ---------------------------------------------------------------
+    if (!outcome.handled) {
+      await ctx.db.insert("stripeEvents", { ...base, outcome: "ignored_unhandled" });
+      return { outcome: "ignored_unhandled", duplicate: false };
+    }
+
+    // ---------------------------------------------------------------
+    // 3. Tenant resolution. Never guessed from a customer id: that
+    //    mapping is not trusted, and inventing one would let a stray
+    //    event move a tenant Disc never linked to it.
+    // ---------------------------------------------------------------
+    const tenantId = outcome.tenantId
+      ? ctx.db.normalizeId("tenants", outcome.tenantId)
+      : null;
+    const tenant = tenantId ? await ctx.db.get(tenantId) : null;
+
+    if (!tenant || !tenantId) {
+      await ctx.db.insert("stripeEvents", { ...base, outcome: "ignored_unresolved" });
+      return { outcome: "ignored_unresolved", duplicate: false };
+    }
+
+    // ---------------------------------------------------------------
+    // 4. The transition guard. Not a timestamp comparison — Stripe
+    //    provides no usable ordering signal. See lib/billing.ts.
+    // ---------------------------------------------------------------
+    const verdict = guardStripeTransition(
+      {
+        subscriptionStatus: tenant.subscriptionStatus,
+        subscriptionId: tenant.stripeSubscriptionId ?? null,
+      },
+      {
+        subscriptionStatus: outcome.subscriptionStatus,
+        subscriptionId: outcome.subscriptionId,
+      },
+    );
+
+    if (!verdict.allow) {
+      await ctx.db.insert("stripeEvents", {
+        ...base,
+        tenantId,
+        outcome: "ignored_stale",
+        reason: verdict.reason,
+      });
+      return { outcome: "ignored_stale", duplicate: false, reason: verdict.reason };
+    }
+
+    // ---------------------------------------------------------------
+    // 5. Apply, through the one mutation allowed to change access.
+    // ---------------------------------------------------------------
+    await ctx.runMutation(internal.billing.applyStripeEvent, {
+      tenantId: outcome.tenantId!,
+      subscriptionStatus: outcome.subscriptionStatus,
+      plan: outcome.plan ?? undefined,
+      customerId: outcome.customerId ?? undefined,
+      subscriptionId: outcome.subscriptionId ?? undefined,
+    });
+
+    await ctx.db.insert("stripeEvents", {
+      ...base,
+      tenantId,
+      outcome: "applied",
+      appliedStatus: outcome.subscriptionStatus,
+    });
+
+    return { outcome: "applied", duplicate: false };
+  },
+});
+
+/** Age out the Stripe event ledger. */
+export const purgeExpiredStripeEvents = internalMutation({
+  args: { olderThan: v.number(), limit: v.optional(v.number()) },
+  returns: v.number(),
+  handler: async (ctx, args) => {
+    const stale = await ctx.db
+      .query("stripeEvents")
+      .withIndex("by_received", (q) => q.lt("receivedAt", args.olderThan))
+      .take(Math.min(args.limit ?? 200, 1000));
+
+    for (const row of stale) await ctx.db.delete(row._id);
+    return stale.length;
   },
 });
 

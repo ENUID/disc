@@ -8,6 +8,7 @@ import {
   JOB_STALE_RUNNING_MS,
   RESYNC_INTERVAL_HOURS,
   SHOPPER_SESSION_RETENTION_DAYS,
+  STRIPE_EVENT_RETENTION_DAYS,
   USAGE_RETENTION_DAYS,
   WEBHOOK_RETENTION_DAYS,
 } from "./lib/env";
@@ -237,6 +238,19 @@ export const purgeExpired = internalAction({
       const deleted: number = await ctx.runMutation(
         internal.webhooks.purgeExpiredDeliveries,
         { olderThan: deliveryCutoff, limit: 1000 },
+      );
+      if (deleted < 1000) break;
+    }
+
+    // Stripe event ledger (P1.5). Kept longer than the Shopify one:
+    // Stripe permits a manual resend for up to 30 days, and a ledger
+    // that has forgotten an event cannot deduplicate its replay.
+    const stripeCutoff =
+      Date.now() - STRIPE_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 10; i++) {
+      const deleted: number = await ctx.runMutation(
+        internal.billing.purgeExpiredStripeEvents,
+        { olderThan: stripeCutoff, limit: 1000 },
       );
       if (deleted < 1000) break;
     }

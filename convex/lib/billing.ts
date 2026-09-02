@@ -157,6 +157,114 @@ export async function createPortalSession(
   return String(session.url);
 }
 
+/**
+ * Subscription state (P1.5).
+ *
+ * Stripe's own vocabulary plus two of Disc's: `none` for a tenant that
+ * has never subscribed, and `pending` for one that has started checkout
+ * and not yet been confirmed by a webhook. Checkout deliberately does
+ * not grant access; only the webhook path does.
+ */
+export const SUBSCRIPTION_STATUSES = [
+  "none",
+  "pending",
+  "incomplete",
+  "incomplete_expired",
+  "trialing",
+  "active",
+  "past_due",
+  "unpaid",
+  "paused",
+  "canceled",
+] as const;
+
+export type SubscriptionStatus = (typeof SUBSCRIPTION_STATUSES)[number];
+
+/**
+ * States a *given subscription* can never leave.
+ *
+ * This is a Stripe fact, not a Disc policy: a deleted subscription is
+ * gone, and a merchant who resubscribes gets a **new** subscription with
+ * a new id. So "canceled" is terminal for that id, and any later event
+ * claiming otherwise for the same id is describing a state that no
+ * longer exists — regardless of when it was delivered.
+ *
+ * That is what makes this a sound ordering rule without a timestamp.
+ */
+export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<string> = new Set([
+  "canceled",
+  "incomplete_expired",
+]);
+
+export function isTerminalSubscriptionStatus(status: string): boolean {
+  return TERMINAL_SUBSCRIPTION_STATUSES.has(status);
+}
+
+export type TransitionVerdict =
+  | { allow: true }
+  | { allow: false; reason: "revives_terminal" | "cancels_superseded" };
+
+/**
+ * Should this event be allowed to change the tenant's access?
+ *
+ * STRIPE PROVIDES NO ORDERING SIGNAL, and its documentation is explicit:
+ * events are not delivered in order, `created` is second-granularity so
+ * distinct events share timestamps, and it must not be used to determine
+ * order. There is no version field on a Subscription object either. So
+ * this guard is deliberately NOT a timestamp comparison — it is a
+ * state-machine rule derived from what Stripe's own semantics make
+ * impossible.
+ *
+ * The principle: reject only changes that NO ordering of events could
+ * justify. Everything else is allowed, because guessing would be worse
+ * than the ambiguity.
+ *
+ * Two such changes exist:
+ *
+ * 1. REVIVING A TERMINAL SUBSCRIPTION. The same subscription id is
+ *    canceled and something later claims it is active or trialing. That
+ *    cannot be true at any point after the cancellation, so the event is
+ *    stale by construction. This is the case that matters most: it is
+ *    how a late `checkout.session.completed` re-grants access to a
+ *    merchant who has cancelled.
+ *
+ * 2. CANCELLING A SUBSCRIPTION THE TENANT NO LONGER HOLDS. A terminal
+ *    event arrives for a *different* subscription than the tenant's
+ *    current one. Whatever the delivery order, cancelling subscription A
+ *    says nothing about subscription B, and acting on it would remove
+ *    access from a merchant who is paying.
+ *
+ * The asymmetry is deliberate and is the safety argument: a
+ * non-terminal event for a different subscription IS allowed, because a
+ * merchant genuinely resubscribing must not be locked out by a rule
+ * meant to protect them.
+ */
+export function guardStripeTransition(
+  current: { subscriptionStatus: string; subscriptionId: string | null },
+  incoming: { subscriptionStatus: string; subscriptionId: string | null },
+): TransitionVerdict {
+  // Nothing recorded yet, or the event names no subscription: there is
+  // no entitlement to protect and no identity to compare against.
+  if (!current.subscriptionId || !incoming.subscriptionId) return { allow: true };
+
+  if (incoming.subscriptionId === current.subscriptionId) {
+    if (
+      isTerminalSubscriptionStatus(current.subscriptionStatus) &&
+      !isTerminalSubscriptionStatus(incoming.subscriptionStatus)
+    ) {
+      return { allow: false, reason: "revives_terminal" };
+    }
+    return { allow: true };
+  }
+
+  // A different subscription. Ending one the tenant does not hold must
+  // not end the one they do.
+  if (isTerminalSubscriptionStatus(incoming.subscriptionStatus)) {
+    return { allow: false, reason: "cancels_superseded" };
+  }
+  return { allow: true };
+}
+
 export type StripeEventOutcome = {
   tenantId: string | null;
   subscriptionStatus: string;

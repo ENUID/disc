@@ -2,9 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   ACTIVE_STATUSES,
+  guardStripeTransition,
   interpretStripeEvent,
+  isTerminalSubscriptionStatus,
   PLANS,
   planForCatalog,
+  SUBSCRIPTION_STATUSES,
+  TERMINAL_SUBSCRIPTION_STATUSES,
   TRIAL_DAYS,
 } from "./billing";
 
@@ -141,4 +145,151 @@ test("plan prices and limits ascend together", () => {
   assert.ok(PLANS.growth.price < PLANS.enterprise.price);
   assert.ok(PLANS.pilot.catalogLimit < PLANS.growth.catalogLimit);
   assert.ok(TRIAL_DAYS > 0);
+});
+
+// ==================================================== the transition guard
+//
+// Stripe does not deliver events in order, provides no version field on a
+// Subscription, and states plainly that `created` must not be used to
+// determine order. So this guard is NOT a timestamp comparison — it is a
+// state-machine rule derived from what Stripe's semantics make
+// impossible, and these tests pin exactly which changes it refuses.
+
+const SUB = "sub_live";
+
+test("a cancelled subscription cannot be revived by a later event", () => {
+  // THE CENTREPIECE. Delivered in reverse, this is how a merchant who
+  // cancelled gets their access handed back:
+  //
+  //   customer.subscription.deleted  -> canceled
+  //   checkout.session.completed     -> trialing   <- must NOT happen
+  //
+  // It cannot be true at any point after the cancellation, so the event
+  // is stale by construction rather than by timestamp.
+  const verdict = guardStripeTransition(
+    { subscriptionStatus: "canceled", subscriptionId: SUB },
+    { subscriptionStatus: "trialing", subscriptionId: SUB },
+  );
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.allow === false && verdict.reason, "revives_terminal");
+});
+
+test("every non-terminal status is refused for a cancelled subscription", () => {
+  for (const status of SUBSCRIPTION_STATUSES) {
+    const verdict = guardStripeTransition(
+      { subscriptionStatus: "canceled", subscriptionId: SUB },
+      { subscriptionStatus: status, subscriptionId: SUB },
+    );
+    assert.equal(
+      verdict.allow,
+      isTerminalSubscriptionStatus(status),
+      `canceled -> ${status}`,
+    );
+  }
+});
+
+test("a cancellation still lands on a live subscription", () => {
+  // The guard must not become a reason that real cancellations are lost.
+  for (const from of ["trialing", "active", "past_due", "unpaid"]) {
+    const verdict = guardStripeTransition(
+      { subscriptionStatus: from, subscriptionId: SUB },
+      { subscriptionStatus: "canceled", subscriptionId: SUB },
+    );
+    assert.equal(verdict.allow, true, `${from} -> canceled`);
+  }
+});
+
+test("an old cancellation cannot end a subscription the tenant now holds", () => {
+  // Subscription A was cancelled and B took over. A's `deleted` event
+  // arrives late. Acting on it would remove access from a merchant who
+  // is paying — and whatever the delivery order, cancelling A says
+  // nothing about B.
+  const verdict = guardStripeTransition(
+    { subscriptionStatus: "active", subscriptionId: "sub_B" },
+    { subscriptionStatus: "canceled", subscriptionId: "sub_A" },
+  );
+  assert.equal(verdict.allow, false);
+  assert.equal(verdict.allow === false && verdict.reason, "cancels_superseded");
+});
+
+test("resubscribing after a cancellation is allowed", () => {
+  // The deliberate asymmetry. A non-terminal event for a DIFFERENT
+  // subscription is allowed, because a merchant genuinely resubscribing
+  // must not be locked out by a rule written to protect them.
+  const verdict = guardStripeTransition(
+    { subscriptionStatus: "canceled", subscriptionId: "sub_A" },
+    { subscriptionStatus: "trialing", subscriptionId: "sub_B" },
+  );
+  assert.equal(verdict.allow, true);
+});
+
+test("a new subscription may take over from a live one", () => {
+  // An upgrade that creates a new subscription rather than editing the
+  // old one must not be refused: the failure would be a paying merchant
+  // with no access, which is worse than the ambiguity it resolves.
+  const verdict = guardStripeTransition(
+    { subscriptionStatus: "active", subscriptionId: "sub_A" },
+    { subscriptionStatus: "active", subscriptionId: "sub_B" },
+  );
+  assert.equal(verdict.allow, true);
+});
+
+test("a first subscription is never blocked", () => {
+  // Nothing recorded yet means no entitlement to protect.
+  assert.equal(
+    guardStripeTransition(
+      { subscriptionStatus: "none", subscriptionId: null },
+      { subscriptionStatus: "trialing", subscriptionId: SUB },
+    ).allow,
+    true,
+  );
+  // And an event naming no subscription has no identity to compare.
+  assert.equal(
+    guardStripeTransition(
+      { subscriptionStatus: "canceled", subscriptionId: SUB },
+      { subscriptionStatus: "active", subscriptionId: null },
+    ).allow,
+    true,
+  );
+});
+
+test("ordinary lifecycle movement is untouched", () => {
+  // The guard exists to refuse changes no ordering could justify, not to
+  // police the lifecycle. Payment failing and recovering is legitimate.
+  for (const [from, to] of [
+    ["trialing", "active"],
+    ["active", "past_due"],
+    ["past_due", "active"],
+    ["active", "unpaid"],
+    ["incomplete", "active"],
+  ]) {
+    assert.equal(
+      guardStripeTransition(
+        { subscriptionStatus: from, subscriptionId: SUB },
+        { subscriptionStatus: to, subscriptionId: SUB },
+      ).allow,
+      true,
+      `${from} -> ${to}`,
+    );
+  }
+});
+
+test("the terminal set is exactly what Stripe cannot walk back", () => {
+  assert.equal(isTerminalSubscriptionStatus("canceled"), true);
+  assert.equal(isTerminalSubscriptionStatus("incomplete_expired"), true);
+  // `past_due` and `unpaid` are recoverable — a merchant can fix a card.
+  // Treating them as terminal would permanently lock out a paying
+  // customer whose payment briefly failed.
+  assert.equal(isTerminalSubscriptionStatus("past_due"), false);
+  assert.equal(isTerminalSubscriptionStatus("unpaid"), false);
+  assert.equal(isTerminalSubscriptionStatus("paused"), false);
+
+  for (const status of TERMINAL_SUBSCRIPTION_STATUSES) {
+    assert.ok(
+      (SUBSCRIPTION_STATUSES as readonly string[]).includes(status),
+      `${status} must be a declared status`,
+    );
+    // A terminal status must never grant access.
+    assert.equal(ACTIVE_STATUSES.has(status), false, `${status} must not entitle`);
+  }
 });
