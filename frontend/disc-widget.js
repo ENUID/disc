@@ -1804,9 +1804,7 @@
     // Ask once, on boot, whether this store's Disc is live. Doing it
     // before hiding anything is what stops a lapsed or misconfigured
     // install from leaving a storefront with no search box at all —
-    // worth one small request per page load. A network failure resolves
-    // as "carry on": the store having Disc briefly misbehave beats it
-    // losing its bar because our status endpoint blipped.
+    // worth one small request per page load.
     fetch(url)
       .then(function (res) {
         return res.ok ? res.json() : null;
@@ -1815,10 +1813,25 @@
         return null;
       })
       .then(function (status) {
-        if (status && status.active === false) return;
+        // ATTACH ONLY ON AN AFFIRMATIVE "THIS STORE'S DISC IS LIVE".
+        //
+        // This guard used to read `status && status.active === false`,
+        // which inverted the whole point of the check: an unresolved
+        // status — a failed fetch, a non-2xx, a malformed body — is not
+        // an object, so every guard was skipped and control fell through
+        // to hideNativeSearch(). A Disc outage therefore took the
+        // merchant's own search box away on every page of their store,
+        // simultaneously, for as long as the incident lasted, and did it
+        // where we could not see it.
+        //
+        // Failing closed costs Disc a page view. Failing open cost the
+        // merchant the only way to search their shop. Those are not
+        // comparable, so this fails closed, and it does so on anything
+        // short of an explicit `active: true`.
+        if (!status || status.active !== true) return;
         // A merchant who hasn't activated Disc yet has a storefront that
         // should look untouched, even though the app is installed.
-        if (status && status.widget_status === "inactive") return;
+        if (status.widget_status === "inactive") return;
         applyBrand(status);
         document.body.appendChild(document.createElement("disc-search-bar"));
         hideNativeSearch();
