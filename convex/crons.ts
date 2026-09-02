@@ -2,8 +2,10 @@ import { cronJobs } from "convex/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import {
   EVENT_RETENTION_DAYS,
+  JOB_STALE_RUNNING_MS,
   RESYNC_INTERVAL_HOURS,
   SHOPPER_SESSION_RETENTION_DAYS,
   USAGE_RETENTION_DAYS,
@@ -25,6 +27,21 @@ crons.interval(
   "resync stale catalogs",
   { hours: Math.max(1, RESYNC_INTERVAL_HOURS) },
   internal.crons.resyncStaleCatalogs,
+  {},
+);
+
+/**
+ * Crash recovery (P1.3).
+ *
+ * A job whose action died is stuck in `running` — it holds a claim that
+ * nothing will ever release, so no retry can reach it and no enqueue can
+ * replace it. This is the only thing that resolves that, so its interval
+ * is also the worst-case latency of recovering from a lost action.
+ */
+crons.interval(
+  "recover stuck jobs",
+  { minutes: 5 },
+  internal.crons.recoverStuckJobs,
   {},
 );
 
@@ -99,6 +116,67 @@ export const drainEnrichment = internalAction({
     // `canDeriveBrand` refuses below the coverage threshold, and this is
     // the point at which coverage stops changing.
     await ctx.scheduler.runAfter(0, internal.brand.buildBrandBrain, { tenantId });
+    return null;
+  },
+});
+
+/**
+ * Recover jobs whose execution died (P1.3).
+ *
+ * A `running` row older than `JOB_STALE_RUNNING_MS` is the signature of
+ * an action that disappeared: it claimed the job, incremented `attempt`,
+ * and never reported anything. P1.1 could see these (`stuckJobs`) and had
+ * no policy for them. This is the policy.
+ *
+ * THE STALE ATTEMPT IS CONSIDERED CONSUMED, and that is the whole reason
+ * a crash loop terminates. `attempt` was incremented at claim, so a job
+ * that dies three times in a row arrives at `attempt === maxAttempts` and
+ * `decideRetry` fails it. Counting attempts on *failure* instead would
+ * mean a process that disappears never reaches the counter, and this
+ * sweeper would resurrect the same job forever.
+ *
+ * WHY IT DOES NOT SIMPLY RE-RUN THE WORK. Blind re-execution would race a
+ * job that is merely slow rather than dead, giving two live executions of
+ * the same work — the exact thing P1.2 was built to prevent. Instead the
+ * job is moved back into the state machine (`running -> retrying`) and
+ * `reportJobFailure` decides from the attempt count whether another
+ * attempt is warranted, exactly as it would for a reported failure.
+ *
+ * THE ONE RACE THIS ACCEPTS, stated plainly: a job that is still alive
+ * past the threshold gets moved to `retrying` under it, and its eventual
+ * `succeedJob` is then refused — `retrying -> succeeded` is not a legal
+ * transition — so its work is redone. The threshold is set well above
+ * Convex's action time limit to make this vanishingly unlikely, and the
+ * consequence when it does happen is a redundant re-run rather than
+ * corruption. The alternative, widening the transition matrix so a
+ * zombie execution can still report success, would weaken a tested
+ * invariant to handle a case that should not occur.
+ */
+export const recoverStuckJobs = internalAction({
+  args: {},
+  returns: v.null(),
+  handler: async (ctx) => {
+    const stale: Array<{
+      _id: Id<"jobs">;
+      tenantId: Id<"tenants">;
+      type: string;
+      attempt: number;
+    }> = await ctx.runQuery(internal.jobs.stuckJobs, {
+      runningSince: Date.now() - JOB_STALE_RUNNING_MS,
+      limit: 50,
+    });
+
+    for (const job of stale) {
+      // `stalled` is a retryable class, so a job with attempts left gets
+      // another and one without is failed with a reason that says what
+      // happened rather than "unknown".
+      await ctx.runMutation(internal.scheduling.reportJobFailure, {
+        tenantId: job.tenantId,
+        jobId: job._id,
+        errorClass: "stalled",
+        message: `Execution stopped reporting after attempt ${job.attempt}`,
+      });
+    }
     return null;
   },
 });

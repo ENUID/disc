@@ -13,7 +13,7 @@
  * is no conversion between embedding spaces.
  */
 
-import type { UsageSink } from "./providers";
+import { ProviderError, type UsageSink } from "./providers";
 
 export type EmbeddingProvider = {
   readonly name: string;
@@ -54,8 +54,16 @@ class OpenAIEmbeddings implements EmbeddingProvider {
     });
 
     if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`Embedding request failed (${response.status}): ${body.slice(0, 300)}`);
+      // Typed rather than bare so the job executor can tell a rate limit
+      // from a bad request without parsing the message (P1.3), and
+      // deliberately without the response body: it is echoed into logs
+      // and into a job row, and a provider's error body is exactly the
+      // place request context turns up.
+      throw new ProviderError(
+        `Embedding request failed (${response.status})`,
+        response.status === 429 || response.status >= 500,
+        response.status,
+      );
     }
 
     const payload = await response.json();

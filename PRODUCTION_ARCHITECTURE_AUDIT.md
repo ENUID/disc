@@ -41,6 +41,28 @@ silently, with a note saying what the original pass got wrong — an audit
 that quietly absorbs its own misses stops being evidence of how much was
 actually checked.
 
+### Status
+
+The findings below are the **original text**, unedited, so this stays a
+record of what was true when it was traced. What has since changed is
+tracked here and nowhere else — one table rather than markers scattered
+through the findings, so there is nothing to drift.
+
+| Finding | Status | Where |
+| --- | --- | --- |
+| P0-1 storefront fails open | closed | P0.1 |
+| P0-2 no request timeouts | closed | P0.2 |
+| P1-1 nothing retries | closed | P1.3 — `PRODUCTION_RETRY_POLICY.md` |
+| P1-2 enrichment stalls 6h after a provider blip | **open** | `drainEnrichment` is an orchestration continuation and was deliberately not migrated in P1.2; it has no job and so no retry |
+| P1-3 `catalogHealth` full scans | open | P1.6 |
+| P1-4 no webhook idempotency | **partial** | P1.2 makes a redelivery a no-op via the idempotency key; event identity and ordering are P1.4 |
+| P1-5 Stripe events not deduplicated | open | P1.5 |
+| P1-6 no durable job state | closed | P1.1 — `PRODUCTION_JOB_STATE.md` |
+| P2-1 `/merchant/resync` no concurrency guard | closed | P1.2 — `PRODUCTION_IDEMPOTENCY.md` |
+| P2-2 … P2-6 | open | — |
+| P2-7 Brand Brain rebuilt on a timer | open | found during P1.2; deliberately not folded into a retry phase |
+| P3-1 no startup config validation | open | — |
+
 ---
 
 ## 1. Findings, ranked

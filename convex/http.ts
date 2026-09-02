@@ -601,14 +601,23 @@ http.route({
     // and before this there was no concurrency guard at all: four clicks
     // meant four concurrent full syncs, four times the Shopify reads and
     // four times the embedding spend. Now they collapse to one job.
+    // `explicit`: this route is a person pressing a button, which is the
+    // one trigger allowed to re-drive a failed sync (P1.3). The cron
+    // sweep calling the same helper without it still deduplicates
+    // against a failed job, because an automatic sweep repeating itself
+    // is not a new decision by anyone.
     const enqueued = await ctx.runMutation(internal.scheduling.enqueueCatalogSync, {
       tenantId,
+      explicit: true,
     });
     return json({
       status: "queued",
       // Truthful about what happened: a merchant clicking twice should
       // not be told two syncs started.
       deduplicated: !enqueued.created,
+      // And a merchant retrying a failed sync should be told that is
+      // what happened, rather than seeing the same "queued" as a no-op.
+      recovered: enqueued.recovered === true,
     });
   }),
 });

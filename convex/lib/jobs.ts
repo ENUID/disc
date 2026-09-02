@@ -15,9 +15,10 @@
  *
  *     scheduler  ──▶  job execution  ◀──▶  durable job record
  *
- * Retry policy is deliberately absent. `attempt` and `maxAttempts` are
- * recorded because the retry phase will need them; nothing here reads
- * them to make a decision yet.
+ * Retry POLICY lives in `lib/retry.ts` — what counts as a retryable
+ * failure, and how long to wait. This module owns only what a job may
+ * legally do next. Keeping them apart is deliberate: the transition
+ * matrix should not have to change when someone tunes a backoff curve.
  */
 
 export const JOB_STATUSES = [
@@ -174,8 +175,63 @@ export function idempotencyKey(type: JobType, parts: Array<string | number>): st
   return [type, ...parts.map((p) => escapePart(String(p)))].join("|");
 }
 
-/** The default attempt ceiling. Recorded now; enforced by the retry phase. */
+/**
+ * The key for an explicit, human-initiated re-run of failed work.
+ *
+ * A failed job holds its key forever — terminal states have no way back
+ * into the machine, by design — so an ordinary enqueue for the same
+ * logical work correctly deduplicates against it. That is right for a
+ * cron sweep and wrong for a merchant pressing "Retry sync", which is a
+ * new decision by a human rather than a repeat of the same trigger.
+ *
+ * So a manual retry gets a derived key: same logical work, new execution
+ * opportunity, and the failed row is left exactly as it was.
+ *
+ * `%retry` cannot collide with an ordinary key. `escapePart` rewrites `%`
+ * to `%25` before joining, so no part can ever contribute a literal `%`
+ * — the sequence `|%` is unreachable through `idempotencyKey`. Appending
+ * a plain `|retry` would NOT be safe: a product whose discriminator
+ * happened to be the string "retry" would produce exactly that.
+ */
+export function manualRetryKey(originalKey: string): string {
+  return `${originalKey}|%retry`;
+}
+
+/** The default attempt ceiling. Enforced by `decideRetry` in lib/retry.ts. */
 export const DEFAULT_MAX_ATTEMPTS = 3;
+
+/**
+ * Hard ceiling on the stored attempt history.
+ *
+ * `maxAttempts` normally bounds it, but `maxAttempts` is a per-job number
+ * and nothing stops a caller passing a large one. A document that grows
+ * without limit fails to write at exactly the scale where its history
+ * mattered, so the bound is enforced here rather than assumed.
+ */
+export const MAX_ATTEMPT_HISTORY = 10;
+
+export type AttemptRecord = {
+  attempt: number;
+  at: number;
+  errorClass: string;
+  message: string;
+  retryable: boolean;
+};
+
+/**
+ * Append one failed attempt, keeping the most recent entries.
+ *
+ * The newest are kept rather than the oldest: when a job has burned
+ * through more attempts than the cap, what happened most recently is what
+ * explains where it ended up.
+ */
+export function appendAttempt(
+  history: AttemptRecord[] | undefined,
+  record: AttemptRecord,
+): AttemptRecord[] {
+  const next = [...(history ?? []), { ...record, message: boundError(record.message, 200) }];
+  return next.slice(-MAX_ATTEMPT_HISTORY);
+}
 
 /**
  * Bound a progress blob.

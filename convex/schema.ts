@@ -190,9 +190,17 @@ export default defineSchema({
    * job, and must resolve to one row — that is what the webhook phase
    * will depend on.
    *
-   * The row is kept small on purpose: no payload field. A job's
-   * authoritative input lives in the domain tables it operates on, so
-   * there is exactly one copy of it and it cannot go stale.
+   * `payload` was deliberately absent in P1.1, on the reasoning that a
+   * job's authoritative input lives in the domain tables it operates on.
+   * That is true of `catalog_sync`, whose only input is the tenant, and
+   * false of `product_embedding`: its input is a Shopify product id that
+   * may not correspond to any row yet (a `products/create` webhook for a
+   * product Disc has never seen). Retry has to re-schedule the same
+   * worker with the same arguments, and the stale-job sweeper has to do
+   * it for a job whose action died, so the arguments have to be on the
+   * row. The shape is a CLOSED object rather than `v.any()` — that is
+   * what stops it becoming a general side-channel, and it means a
+   * credential cannot be put here without a visible schema edit.
    */
   jobs: defineTable({
     tenantId: v.id("tenants"),
@@ -212,14 +220,56 @@ export default defineSchema({
     attempt: v.number(),
     maxAttempts: v.number(),
 
+    /** Worker arguments. Closed shape — never credentials. See above. */
+    payload: v.optional(
+      v.object({
+        shopifyProductId: v.optional(v.string()),
+      }),
+    ),
+
     scheduledAt: v.optional(v.number()),
     startedAt: v.optional(v.number()),
     completedAt: v.optional(v.number()),
-    /** Written by the retry phase. Nothing reads it yet. */
+    /** When the next attempt is scheduled for. Written on every retry. */
     nextAttemptAt: v.optional(v.number()),
+    /** When the most recent attempt failed — retryable or not. */
+    failedAt: v.optional(v.number()),
 
     progress: v.optional(v.any()),
     lastError: v.optional(v.string()),
+    /** Classification of the most recent failure. See lib/retry.ts. */
+    errorClass: v.optional(v.string()),
+    /** Whether that failure was judged worth repeating. */
+    retryable: v.optional(v.boolean()),
+
+    /**
+     * One entry per failed attempt, so "why did this run three times" is
+     * answerable from the row rather than from log archaeology. Bounded
+     * in `lib/jobs.ts` — an attempt ceiling keeps it small, and the cap
+     * means a pathological `maxAttempts` still cannot grow a document
+     * past its limit.
+     */
+    attempts: v.optional(
+      v.array(
+        v.object({
+          attempt: v.number(),
+          at: v.number(),
+          errorClass: v.string(),
+          message: v.string(),
+          retryable: v.boolean(),
+        }),
+      ),
+    ),
+
+    /**
+     * The failed job this one was created to re-run.
+     *
+     * Set only by an explicit manual retry. It is what makes the history
+     * of a piece of work followable across the terminal boundary that
+     * `failed` deliberately imposes: the old row keeps every attempt it
+     * made, and this points back at it rather than overwriting it.
+     */
+    supersedes: v.optional(v.id("jobs")),
 
     createdAt: v.number(),
     updatedAt: v.number(),

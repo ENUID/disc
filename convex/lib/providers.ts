@@ -76,13 +76,29 @@ export interface VisionProvider {
   describe(request: VisionRequest): Promise<ModelResponse>;
 }
 
+/**
+ * A model or embedding call that failed.
+ *
+ * `retryable` is decided here, at the one place that saw the response.
+ * Callers must not re-derive it — the job executor reads it through
+ * `classifyFailure` and nothing else inspects it (P1.3).
+ *
+ * `status` is carried alongside so the executor can tell a rate limit
+ * from an outage from a malformed request without parsing the message.
+ * Both are declared and assigned explicitly rather than as constructor
+ * parameter properties: those emit runtime code that Node's
+ * type-stripping test runner rejects, the same reason `ShopifyAdminError`
+ * is written this way.
+ */
 export class ProviderError extends Error {
   readonly retryable: boolean;
+  readonly status?: number;
 
-  constructor(message: string, retryable = false) {
+  constructor(message: string, retryable = false, status?: number) {
     super(message);
     this.name = "ProviderError";
     this.retryable = retryable;
+    this.status = status;
   }
 }
 
@@ -130,6 +146,7 @@ class AnthropicProvider implements ReasoningProvider, VisionProvider {
       throw new ProviderError(
         `Model request failed (${response.status})`,
         retryable,
+        response.status,
       );
     }
 

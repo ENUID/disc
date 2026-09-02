@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import {
+  appendAttempt,
   boundError,
   boundProgress,
   canTransition,
@@ -221,22 +222,45 @@ export const succeedJob = internalMutation({
  * ambiguity the audit found.
  */
 export const failJob = internalMutation({
-  args: { tenantId: v.id("tenants"), jobId: v.id("jobs"), error: v.string() },
-  handler: async (ctx, args) =>
-    transition(ctx, args.tenantId, args.jobId, "failed", {
-      completedAt: Date.now(),
+  args: {
+    tenantId: v.id("tenants"),
+    jobId: v.id("jobs"),
+    error: v.string(),
+    /** Classification from lib/retry.ts. Omitted only by direct callers. */
+    errorClass: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.jobId);
+    const now = Date.now();
+    return transition(ctx, args.tenantId, args.jobId, "failed", {
+      completedAt: now,
+      failedAt: now,
       lastError: boundError(args.error),
-    }),
+      ...(args.errorClass ? { errorClass: args.errorClass } : {}),
+      retryable: false,
+      attempts: appendAttempt(existing?.attempts, {
+        attempt: existing?.attempt ?? 0,
+        at: now,
+        errorClass: args.errorClass ?? "unknown",
+        message: boundError(args.error),
+        retryable: false,
+      }),
+    });
+  },
 });
 
 /**
  * Mark a job as awaiting another attempt.
  *
- * This records the *state*; it does not decide when, or whether, to try
- * again — no backoff, no attempt-ceiling check. Those are the retry
- * phase's job. What exists now is the state a retry policy will move
- * jobs into, and the fact that a job in it stays claimable under its
- * original identity and attempt count.
+ * This records the *state*. It does not decide whether to try again or
+ * how long to wait — `decideRetry` in `lib/retry.ts` owns that, and
+ * `reportJobFailure` in `scheduling.ts` applies it. Keeping the decision
+ * out of here is what lets the transition matrix stay a statement about
+ * legality rather than about policy.
+ *
+ * A job in `retrying` keeps its identity, its idempotency key and its
+ * attempt count. That is the whole reason `retrying` is claimable: a
+ * retry is a second attempt of the same job, not a second job.
  */
 export const retryJob = internalMutation({
   args: {
@@ -244,12 +268,26 @@ export const retryJob = internalMutation({
     jobId: v.id("jobs"),
     error: v.string(),
     nextAttemptAt: v.optional(v.number()),
+    errorClass: v.optional(v.string()),
   },
-  handler: async (ctx, args) =>
-    transition(ctx, args.tenantId, args.jobId, "retrying", {
+  handler: async (ctx, args) => {
+    const existing = await ctx.db.get(args.jobId);
+    const now = Date.now();
+    return transition(ctx, args.tenantId, args.jobId, "retrying", {
       lastError: boundError(args.error),
       nextAttemptAt: args.nextAttemptAt,
-    }),
+      failedAt: now,
+      ...(args.errorClass ? { errorClass: args.errorClass } : {}),
+      retryable: true,
+      attempts: appendAttempt(existing?.attempts, {
+        attempt: existing?.attempt ?? 0,
+        at: now,
+        errorClass: args.errorClass ?? "unknown",
+        message: boundError(args.error),
+        retryable: true,
+      }),
+    });
+  },
 });
 
 export const cancelJob = internalMutation({
@@ -320,9 +358,12 @@ export const listJobs = internalQuery({
  *
  * A `running` row older than any plausible execution is the signature of
  * an action that died — the exact state that was previously invisible.
- * This only *reports* them; deciding what to do about a stuck job is the
- * retry phase's call, and doing it here would be a sweeper racing the
- * scheduler.
+ *
+ * This still only *reports*. The policy that acts on it is
+ * `recoverStuckJobs` in `crons.ts`, which hands each stale job to
+ * `reportJobFailure` rather than re-running it: a sweeper that executed
+ * work directly would race the scheduler for the same job, which is the
+ * design this table exists to avoid.
  */
 export const stuckJobs = internalQuery({
   args: { runningSince: v.number(), limit: v.optional(v.number()) },

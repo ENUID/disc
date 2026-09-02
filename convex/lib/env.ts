@@ -77,6 +77,33 @@ export const SHOPIFY_API_VERSION = "2025-01";
 /** Catalog resync cadence — how stale a merchant's index can get. */
 export const RESYNC_INTERVAL_HOURS = Number(env("DISC_RESYNC_HOURS") || "6");
 
+/**
+ * Retry tuning (P1.3).
+ *
+ * Configurable rather than literal because the right values depend on
+ * failure data this deployment does not have yet. The defaults are a
+ * starting point, not a claim: one second is short enough to ride out a
+ * blip, five minutes is long enough not to hammer a provider that is
+ * genuinely down, and ±25% is enough spread to stop a fleet of jobs that
+ * failed together from retrying in lockstep.
+ */
+export const RETRY_BASE_MS = Number(env("DISC_RETRY_BASE_MS") || "1000");
+export const RETRY_CAP_MS = Number(env("DISC_RETRY_CAP_MS") || String(5 * 60 * 1000));
+export const RETRY_JITTER = Number(env("DISC_RETRY_JITTER") || "0.25");
+
+/**
+ * How long a `running` job is presumed healthy.
+ *
+ * Past this it is treated as an action that died — the crash signature
+ * the audit found no way to see. Deliberately well above Convex's action
+ * time limit: a threshold below it would "recover" jobs that are still
+ * working, and a second execution of live work is worse than a late
+ * recovery of dead work.
+ */
+export const JOB_STALE_RUNNING_MS = Number(
+  env("DISC_JOB_STALE_MS") || String(15 * 60 * 1000),
+);
+
 /** Merchant session lifetime. */
 export const MERCHANT_SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 
