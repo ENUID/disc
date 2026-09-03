@@ -121,11 +121,27 @@ and each is the kind of thing a new subsystem breaks by accident.
    exists precisely so a new evidence source cannot renormalise the
    existing terms.
 
-4. **Cold start must stay harmless.** A brand that uploads nothing must
+4. **Presence is not compatibility.** Two distinct claims that
+   documentation and schema must not collapse:
+
+   ```
+   CONTENT PRESENCE       a product appears in a bounded content scope
+   CONTENT COMPATIBILITY  products were intentionally styled together
+   ```
+
+   A campaign photograph establishes both — everything in frame was
+   styled together. A video scene can establish presence without
+   establishing compatibility: two garments eight minutes apart in a
+   lookbook were not styled as an outfit. Deriving compatibility from
+   unbounded co-presence would fill the outfit graph with pairs nobody
+   styled, carrying the authority of a merchant approval it never had.
+   See `PRODUCTION_P2_ARCHITECTURE.md` §3.
+
+5. **Cold start must stay harmless.** A brand that uploads nothing must
    not get worse results than one that does. Tested twice for looks; the
    same two assertions are owed by any content-derived signal.
 
-5. **Tenant isolation, with no global content index.** Every content
+6. **Tenant isolation, with no global content index.** Every content
    item, relationship, scene and detection belongs to exactly one tenant.
    A shopper in Brand A must never retrieve Brand B's anything. The
    schema-reading guard in `privacy.itest.ts` fails the build when a new
@@ -134,14 +150,14 @@ and each is the kind of thing a new subsystem breaks by accident.
    any table holding a storage id needs explicit deletion and its own
    test, as `looks` has.
 
-6. **The storefront degrades safely.** If Disc cannot reach its backend,
+7. **The storefront degrades safely.** If Disc cannot reach its backend,
    the merchant's own search must not stay hidden. This is P0.1, already
    enforced and tested in `frontend/tests/outage_test.js`. **Moving to an
    App Embed changes how the widget mounts and must not lose it** — the
    suite runs the widget from disk against a stub, so it will still catch
    a regression if the mount path is re-pointed rather than rewritten.
 
-7. **Every expensive operation is a durable job**, tenant-scoped,
+8. **Every expensive operation is a durable job**, tenant-scoped,
    idempotent, bounded, retryable where appropriate, observable, and safe
    under duplicate invocation. `JOB_TYPES` is a closed set and
    `scheduleWorker` throws for a type with no branch, so adding
@@ -161,12 +177,16 @@ already exists — `extensions/disc-boutique/` is a complete theme app
 extension, kept in sync by `npm run verify`. What follows is what is
 genuinely outstanding.)*
 
-**Publishing** it depends on a Shopify Partner account, an app
-registration, app review, a privacy policy URL and listing assets —
-external and slow. A listing also implies switching billing from Stripe
-to Shopify's Billing API (0% of the first $1M, 15% above), which changes
-the economics. None of that blocks P1.4–P1.6; all of it blocks a public
-launch. Worth starting the Partner registration in parallel.
+**Corrected again after reading `shopify.app.toml`:** Disc is a
+**custom-distribution** app, which installs on one store at a time with
+**no App Store review**. So publishing is not gated on approval. What it
+needs is operational: create the app in the Partner Dashboard for a
+`client_id`, fill in the deployed URLs, and `shopify app deploy`.
+
+Custom distribution is also *why* billing is Stripe — custom apps cannot
+use Shopify's Billing API. Moving to Shopify Billing (0% of the first
+$1M, 15% above) is a consequence of choosing a *public* listing later,
+not a pending migration.
 
 The one piece of P2 that is *code* is the entry point:
 `placement: "floating_button"` is a valid, merchant-settable, persisted

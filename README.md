@@ -1,54 +1,58 @@
 # Disc
 
-**An AI-native personalized commerce layer for fashion brands that turns
-a Shopify store into a more personal shopping experience, helping people
-discover, style, compare, and decide what to buy from the brand's own
-catalog.**
+**Disc is an AI-native personalized commerce layer for fashion brands
+that turns a Shopify store into a more personal shopping experience,
+helping people discover, style, compare, and decide what to buy from the
+brand's own catalog.**
 
-A shopper on a fashion site usually has a question the site cannot
-answer. Not "show me black dresses" — a filter does that — but "which of
-these actually suits what I'm after", "does this work with what I already
-own", "is this too formal for what I need it for", "what would finish
-this look". Those are decisions, and most storefronts leave the shopper
-to make them alone.
-
-Disc is the layer that helps. It reads the brand's catalog, learns what
-the brand's products actually are and how they relate to each other,
-takes what a shopper says they want, and works through it with them. It
-runs inside the merchant's existing Shopify store, and everything it
-recommends is a real, available product from that brand.
-
-Disc is AI-native: reading products, understanding a brand's style,
-interpreting what a shopper means and reasoning about how garments work
-together are not features bolted onto a catalog search — they are what
-the system is built out of. But AI is the *how*. The *what* is a better
-way to decide what to buy, and that is what a merchant is buying.
+In plain language: a fashion brand already has a Shopify store, a
+catalog, and a checkout. Disc adds a layer inside that store which
+understands what the brand sells, understands what a shopper is trying to
+decide, and helps them get to an answer. Everything it recommends is a
+real, available product from that brand, bought through that brand's own
+checkout.
 
 ---
 
-## What Disc does
+## Why Disc exists
 
-Four jobs, and they are one journey rather than four features:
+A shopper on a fashion site usually has a question the site cannot
+answer. Not "show me black dresses" — a filter does that — but:
 
-**Discover** — Turn what a shopper says into products that actually fit
-it. Not keyword matching against titles: understanding "something for a
-humid beach wedding" as a set of constraints about weight, formality,
-fabric and season, then finding what in this catalog meets them.
+- Which of these actually fits what I'm looking for?
+- Which of these two is better for me?
+- What works with this?
+- What changes if I choose this instead?
+- Is this too formal for what I need it for?
+- What would complete the look?
+- Why are you recommending this?
+- Which one should I actually buy?
 
-**Style** — Understand how pieces work together, and build a coherent
+Those are decisions, not queries. Most storefronts leave the shopper to
+make them alone, and the shopper resolves the uncertainty by leaving.
+
+Disc exists to reduce that uncertainty.
+
+---
+
+## Discover, style, compare, decide
+
+Four verbs, and they are one journey rather than four features.
+
+**Discover** — Find relevant products from this brand. Not keyword
+matching against titles: reading "something for a humid beach wedding" as
+constraints about weight, formality, fabric and season, then finding what
+in this catalog meets them.
+
+**Style** — Understand how products work together and build a coherent
 look. A cardigan's nearest neighbours are four more cardigans; an outfit
-is trousers, a knit, outerwear. Disc reasons about compatibility, not
-similarity.
+is trousers, a knit, outerwear. Compatibility, not similarity.
 
-**Compare** — Help a shopper understand the real difference between two
-things they are choosing between, including the trade-off. *(Direction —
-see The product today.)*
+**Compare** — Understand the meaningful differences and trade-offs
+between relevant options. *(Direction — see Current capabilities.)*
 
-**Decide** — Turn the evidence into a recommendation the shopper can act
-on, and say why. A recommendation nobody understands is one nobody
-trusts.
-
-The journey those four make:
+**Decide** — Reach a confident purchase decision, and understand why. A
+recommendation nobody understands is one nobody trusts.
 
 ```
 "I'm looking for something"
@@ -62,19 +66,18 @@ The journey those four make:
 "I know which one I want"
 ```
 
-The product is not search. The product is helping someone make a better
-purchase decision inside a brand's own catalog.
+The product is not search. It is helping someone make a better purchase
+decision inside a brand's own catalog.
 
 ---
 
 ## Where Disc lives
 
-Inside the merchant's existing Shopify store. It does not replace
-anything.
+Inside the merchant's existing Shopify store. It replaces nothing.
 
 ```
 merchant's Shopify store
-        ↓  a small entry point the merchant controls
+        ↓  an entry point the merchant controls
 Disc experience
         ↓  the brand's own catalog
 shopper's decision
@@ -82,263 +85,306 @@ shopper's decision
 the merchant's own cart and checkout
 ```
 
-The division of responsibility is deliberate:
-
 | | Owns |
 | --- | --- |
-| **Shopify** | commerce infrastructure — catalog, storefront, checkout |
-| **Merchant** | brand, products, merchandising, inventory, the commercial relationship |
-| **Disc** | shopping intelligence and the decision experience |
-| **Shopper** | gets a more personal way to discover and decide |
+| **Shopify** | the merchant's existing commerce infrastructure — catalog, storefront, checkout |
+| **Disc** | the personalized intelligence and shopping experience layer |
+| **Merchant** | the brand, catalog, products, inventory and commerce relationship |
+| **Shopper** | a more personal way to discover, style, compare and decide |
 
-The merchant keeps their storefront, their branding, their navigation,
-their product pages and their checkout. Disc adds a way to decide, and
-hands the shopper back to the merchant's own cart to buy.
+The merchant keeps their storefront, branding, navigation, product pages
+and checkout. Disc adds a way to decide and hands the shopper back to the
+merchant's own cart.
 
 **Shopify remains the source of truth for every transactional fact** —
-price, currency, variants, availability, product URLs. Disc never
-becomes the authority on what something costs or whether it is in stock.
-What Disc adds is inference *about* those products, kept in separate
-tables so the two can never be confused.
+price, currency, variants, availability, product URLs. Disc never becomes
+the authority on what something costs or whether it is in stock. What
+Disc adds is inference *about* those products, kept in separate tables so
+the two can never be confused.
 
 **If Disc is unavailable, the store is unaffected.** The experience
-mounts only after confirming the merchant's Disc is live, so a backend
-outage leaves the storefront exactly as it was — including the theme's
-own search. Disc must never be a way for a merchant's store to break.
+mounts only after confirming that this merchant's Disc is live, so an
+outage leaves the storefront exactly as it was, including the theme's own
+search. Disc must never be a way for a merchant's store to break.
 
 ---
 
-## How Disc works
+## One Disc, many tenant knowledge worlds
 
 ```
-the brand's Shopify catalog
-        ↓
-product intelligence     what each product actually is
-        ↓
-brand understanding      what this brand's world looks like
-        ↓
-shopper intent           what this person is trying to decide
-        ↓
-decision engine          combine all of it into a real recommendation
-        ↓
-a personalized shopping experience, in the merchant's store
+ONE DISC SOFTWARE  +  MANY TENANT-SPECIFIC KNOWLEDGE WORLDS
 ```
 
-What each layer means:
+Shared across every merchant: the storefront runtime, the decision
+engine, retrieval, ranking, judging, explanation, orchestration,
+reliability and analytics infrastructure.
+
+Specific to one merchant: the Shopify catalog, products, variants and
+availability; Product Intelligence; the Brand Brain; the brand's
+terminology and visual identity; styling relationships and approved
+looks; and — as direction — brand content and content/product
+relationships.
+
+This is **not** one AI model per merchant. The intelligence system is
+shared; the world it reasons over belongs to one brand at a time.
+
+That boundary is enforced rather than intended. Every tenant-owned row
+carries a tenant id, every index leads with it, the vector index filters
+on it, and a test reads the schema and fails the build if a new
+tenant-scoped table is not covered by tenant deletion.
+
+---
+
+## What Disc understands
 
 **Product catalog** — what the brand actually sells. Read from Shopify:
 products, variants, price, currency, images, availability. Facts, kept as
 facts.
 
-**Product intelligence** — what Disc understands *about* those products.
+**Product Intelligence** — what Disc understands *about* those products.
 Garment type, fit, volume, weight, drape, pattern, colour family,
-formality, season, occasion. Derived by reading the product's text and
-looking at its images, and stored separately from the Shopify facts so
+formality, season, occasion. Derived by reading each product's text and
+looking at its images, stored separately from the Shopify facts so
 inference is never mistaken for truth.
 
-**Brand Brain** — what Disc understands about the brand itself. Its style
-vector, palette, formality range, product world, and voice, derived from
-the catalog as a whole rather than declared in a settings form. A
-merchant can correct it, and a correction is versioned rather than
-overwritten.
+**Brand Brain** — what Disc understands about the brand itself: style
+vector, palette, formality range, product world, voice. Derived from the
+catalog as a whole rather than declared in a settings form. A merchant
+can correct it, and a correction is versioned rather than overwritten.
 
-**Shopper intent** — what this particular person is trying to find or
-decide. Budget, occasion, constraints, what they have already rejected,
-what they said three messages ago.
+**Shopper intent** — what this person is trying to find or decide.
+Budget, occasion, constraints, what they have rejected, what they said
+three messages ago.
 
-**Decision engine** — how those combine. Intent parsing, retrieval,
-constraint filtering, outfit assembly, ranking, a judging pass,
-diversity, and an explanation drawn from real evidence rather than
-generated flattery.
-
-**Brand content** — additional evidence from a brand's own imagery: a
-campaign photograph is a record of a styling decision someone made
-deliberately. Today this is merchant-uploaded looks; the wider content
-layer is direction, not current.
-
-**Storefront runtime** — how the experience reaches the shopper inside
-the merchant's store.
+**Brand content** — a campaign photograph is a record of a styling
+decision someone made deliberately. Today this is merchant-uploaded
+looks; the general content layer is direction.
 
 ---
 
-## One Disc, many brand knowledge worlds
-
-The software is shared. The knowledge is not.
+## How the decision engine works
 
 ```
-ONE DISC SOFTWARE
-        +
-MANY TENANT-SPECIFIC KNOWLEDGE WORLDS
+intent      → what did the shopper actually ask for
+retrieval   → what could be relevant          (vector search)
+constraints → what is actually buyable        (deterministic)
+assembly    → what goes together              (deterministic)
+ranking     → which is strongest              (deterministic)
+judge       → is it actually coherent         (model, independent)
+diversity   → are these meaningfully different
+explanation → why, from real evidence
 ```
 
-Every merchant runs the same Disc — the same retrieval, the same ranking,
-the same interface, the same reasoning. What differs is the world that
-Disc reasons about:
+**Everything before the judge runs without a model call.** The model only
+ever sees the final handful, and if it is unavailable the engine still
+works — it loses its second opinion, not its answer.
 
-- the Shopify catalog, products, variants and availability
-- product intelligence derived from them
-- the Brand Brain
-- the brand's vocabulary and visual identity
-- styling relationships and approved looks
-- merchandising context
-- *(direction)* campaign imagery, video, social content, and the
-  relationships between content and products
-
-This is **not** a separate AI model per merchant. The intelligence is one
-system; the context it reasons over belongs to one brand at a time.
-
-That boundary is enforced rather than intended. Every tenant-owned row
-carries a tenant id, every index leads with it, the vector index filters
-on it, and a test reads the schema and fails the build if a new
-tenant-scoped table is not covered by tenant deletion. A shopper in one
-brand's store cannot reach another brand's catalog, brand model, looks or
-analytics.
+This is what "AI-native" means here, concretely. AI is not a feature
+bolted onto a catalog search; it is how the system understands products,
+brands, intent and compatibility, and it is staged so that the expensive,
+non-deterministic part is the smallest part. The product category is the
+personalized commerce layer. AI is what makes that layer possible.
 
 ---
 
-## The product today
+## The merchant side
 
-Claims here are limited to what the repository implements. Everything
-else is in the next section.
+The merchant installs Disc, connects Shopify, and Disc reads the catalog
+and builds its understanding. From the dashboard they can see what Disc
+learned, correct the Brand Brain, review catalog health, build and
+approve looks, configure the shopper experience, read analytics, and
+manage billing.
 
-**Implemented**
+Disc starts switched off. Nothing appears to shoppers until the merchant
+turns it on.
+
+**A model proposes; the merchant confirms.** In the Look Builder, vision
+detection produces *candidates* — a model can see "a white shirt" in a
+photograph and have no idea which of fourteen white shirts it is.
+`looks.detected` (what the model saw) and `looks.items` (what the
+merchant confirmed) are separate fields, and only confirmed information
+becomes authoritative evidence. That separation is load-bearing and
+carries forward into all future content work.
+
+## The shopper side
+
+A shopper opens Disc from inside the merchant's store, says what they are
+looking for, and works through it: results from this brand's catalog,
+product detail with real sizes and availability, complete-the-look
+outfitting, a saved-items list, and add-to-cart into the merchant's own
+cart.
+
+---
+
+## Current capabilities
+
+Claims here are limited to what the repository implements.
 
 - Shopify catalog ingestion via the Admin API — products, variants,
   price, currency, images, availability, with reconciliation for products
   removed at source
 - Product enrichment into structured fashion attributes, from text and
   images, cached so nothing is re-analysed unless its evidence changed
-- Embeddings and vector retrieval, filtered by tenant
-- Brand Brain derived from the catalog, versioned, merchant-correctable
-- Intent parsing — budget, occasion, constraints, follow-ups
-- **Discover**: semantic search over the brand's catalog with sold-out
+- Embeddings and tenant-filtered vector retrieval
+- Brand Brain, derived from the catalog, versioned, merchant-correctable
+- Structured shopper intent, including follow-up and refinement state
+- **Discover** — semantic search over the brand's catalog, sold-out
   products filtered out
-- **Style**: complete-the-look and outfit assembly with compatibility
-  reasoning; merchant-uploaded looks where the merchant confirms which
-  catalog products appear, feeding an outfit graph
-- **Decide**: ranking, a judging pass, diversity, and explanations
-  grounded in real evidence, with every recommendation traced
-- Shopper sessions, analytics, and per-tenant model-cost accounting
+- **Style** — outfit assembly and complete-the-look with compatibility
+  logic; the Look Builder, where merchants confirm which catalog products
+  appear in an uploaded image; approved looks feed an outfit graph
+- **Decide** — ranking, an independent judging pass, diversity, and
+  explanations grounded in real evidence, with every recommendation traced
 - Merchant dashboard: overview, brand, catalog, looks, experience,
   analytics, billing, settings
-- Billing, rate limiting, tenant isolation and privacy/deletion guarantees
-- A Shopify theme app extension: an app embed block that identifies the
-  store, passes page context, currency and locale, loads without blocking
-  rendering, and starts switched off
-- Operational foundation: durable background jobs, idempotent scheduling,
-  bounded retry with crash recovery, Shopify and Stripe event ledgers,
-  and constant-time catalog health
+- Shopper sessions, analytics, and per-tenant model-cost accounting
+- Billing (Stripe), rate limiting, tenant isolation, privacy and deletion
+  guarantees
+- A Shopify **theme app extension** — an app embed block that identifies
+  the store, passes page context, currency and locale, loads without
+  blocking rendering, and starts deactivated
+- Reliability: durable background jobs, idempotent scheduling, bounded
+  retry with crash recovery, Shopify and Stripe event ledgers,
+  constant-time catalog health
 
-**Not yet implemented, though named in the product definition**
+**Named in the definition but not yet implemented:**
 
-- **Compare** is declared in the workflow vocabulary and understood by
-  intent parsing, but there is no comparison handler and no comparison
-  interface. It is direction, not a current capability.
-- The small merchant-controlled entry point — a distinct control the
-  shopper taps to open Disc — exists as a configuration value that the
-  storefront runtime does not yet act on. Disc currently presents as a
-  docked bar.
-- The app embed exists in the repository but is not published: that needs
-  a Shopify Partner account, app registration and review.
+- **Compare** is in the workflow vocabulary and understood by intent
+  parsing, but there is no comparison handler and no comparison
+  interface. Direction, not capability.
+- The merchant-controlled **entry point** is a persisted configuration
+  value (`placement: "floating_button"`) that the storefront runtime does
+  not yet read. Disc currently presents as a docked bar.
 
 ---
 
-## Where it is going
+## Future direction
 
-Direction, not current functionality.
+Labelled as direction. None of this is implemented.
 
-**Distribution.** Publishing the theme app extension so installation is a
-Shopify app install and a switch in the theme editor, with no theme code
-edited by hand. Implementing the merchant-controlled entry point, with
-its label a merchant setting rather than a fixed word — "Personalized
-Style", "Your Style", "Personal Stylist" and "Discover Your Style" are
-all candidates and none is canonical.
+**Comparison** — making Compare real: meaningful differences and
+trade-offs between relevant options.
 
-**Comparison.** Making Compare a real capability: meaningful differences
-between relevant products, including the trade-offs.
+**A general brand content model** — editorial and campaign imagery,
+lookbooks, video, and eventually social content, generalising what the
+Look Builder already does for a single uploaded image.
 
-**Brand content intelligence.** A brand already produces the material
-that explains its products — campaign imagery, lookbooks, editorial
-photography, video, social content. Today Disc can learn from
-merchant-uploaded looks. The direction is a general content layer:
+**Video intelligence** — scene and timestamp mapping: video → scenes →
+detected garments → candidate catalog products → merchant confirmation.
+
+**A content/product graph**, and richer content-aware evidence in the
+decision engine.
+
+Two distinctions govern all of it, and documentation must not collapse
+them:
 
 ```
-content
-    ↓  understanding
-candidate product associations
-    ↓  merchant confirmation
-content ↔ product relationships
-    ↓
-additional evidence for the decision engine
+CONTENT PRESENCE        a product appears in a bounded content scope
+CONTENT COMPATIBILITY   products were intentionally styled together
 ```
 
-For video, the same shape at a finer grain: video → scenes → detected
-garments → candidate catalog products → merchant confirmation.
+These are not the same claim. A campaign photograph establishes both — everything
+in frame was styled together. A video scene can establish presence
+without establishing compatibility: two garments eight minutes apart in a
+lookbook were not styled as an outfit. Deriving compatibility from
+unbounded co-presence would fill the outfit graph with pairs nobody
+styled, carrying the authority of a merchant approval it never had.
 
-Two rules govern all of it:
-
-**A model may propose; the merchant confirms.** A model can see "a white
-shirt" in a photograph and have no idea which of fourteen white shirts it
-is. Detection produces candidates. Auto-assigning would teach Disc a
-relationship between products that were never photographed together, and
-nothing downstream could tell that from a real one.
-
-**Content is evidence, not a dictator.** A campaign showing two pieces
-styled together is strong evidence they work together. It must never
+And: **content is evidence, not a ranking dictator.** It must never
 override an explicit shopper constraint — "under £200", "no leather",
-"available in my size" — and it must never make a brand that uploads
-nothing worse off than one that does.
+"available in my size" — and a brand that uploads nothing must never get
+worse results than one that does.
 
-Detailed direction lives in
-[`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md) and
+Fuller detail in [`PRODUCT_DIRECTION.md`](PRODUCT_DIRECTION.md) and
 [`PRODUCTION_P2_ARCHITECTURE.md`](PRODUCTION_P2_ARCHITECTURE.md).
 
 ---
 
 ## What Disc is not
 
-Stated explicitly, because each of these is a plausible misreading:
-
-- **Not a marketplace.** There is no Disc storefront, no cross-brand
-  catalog, no aggregated inventory. A shopper is in one brand's store
-  buying that brand's products.
+- **Not a generic chatbot.** A text box is how a shopper says what they
+  want. The product is what happens after.
+- **Not a generic AI search box.** Search returns matches; Disc helps
+  someone decide between them.
+- **Not a standalone fashion marketplace.** No Disc storefront, no
+  cross-brand catalog, no aggregated inventory.
 - **Not a replacement storefront.** The merchant's site, brand,
-  navigation, product pages and checkout stay exactly as they are.
-- **Not a chatbot.** A text box is how a shopper says what they want. The
-  product is what happens after: retrieval, constraint filtering, outfit
-  reasoning, ranking, judging, explanation. Conversation is an interface,
-  not the thing.
-- **Not a generic AI search box.** Search returns matches. Disc is built
-  to help someone decide between them.
-- **Not a separate AI model per merchant.** One system, many
-  tenant-specific knowledge worlds.
-- **Not a general ecommerce AI layer.** It is built for fashion, and the
-  reasoning — fit, drape, formality, silhouette, what completes a look —
-  is fashion-specific.
+  navigation, product pages and checkout stay as they are.
+- **Not a social feed disconnected from commerce.** Content earns its
+  place by helping someone decide what to buy.
+- **Not an autonomous agent swarm.** The engine is staged and mostly
+  deterministic; the model is a bounded step inside it.
+- **Not a generic LLM wrapper.** The reasoning is fashion-specific — fit,
+  drape, formality, silhouette, what completes a look — over one brand's
+  catalog.
+- **Not one AI model per merchant.** One system, many tenant-specific
+  knowledge worlds.
 
 ---
 
 ## Architecture
 
 ```
-/convex          the product backend (TypeScript, Convex)
+Shopify  ──catalog──▶  ingestion  ──▶  Product Intelligence
+                                              │
+                                              ▼
+                                        Brand Brain
+                                              │
+shopper intent  ──────────────────────▶  decision engine
+                                              │
+                                              ▼
+                                    storefront runtime
+                                              │
+                                              ▼
+                                merchant's cart and checkout
+```
+
+The backend is Convex (TypeScript). The storefront runtime is one
+dependency-free file delivered as a Shopify theme app extension. The
+merchant dashboard is Next.js, server components only — the merchant
+token never reaches the browser.
+
+### Distribution
+
+Disc is a **custom-distribution Shopify app** (`shopify.app.toml`). A
+custom app installs on one store at a time with **no App Store review**,
+which is what lets Disc reach its first merchants without waiting on
+approval. It still supports theme app extensions, so the merchant gets
+the proper install: enable the app embed in the theme editor, with no
+pasted snippet and no edited `theme.liquid`.
+
+One documented consequence: custom apps cannot use Shopify's Billing API,
+so billing is Stripe. That is the constraint of this distribution type,
+not a workaround.
+
+What is outstanding is operational rather than architectural — creating
+the app in the Partner Dashboard to obtain a `client_id`, filling in the
+deployed URLs, and `shopify app deploy`.
+
+### Repository structure
+
+```
+/convex          the product backend
   schema.ts      the data model — every tenant-owned row carries a tenant id
   ingest.ts      Shopify catalog ingestion
-  enrichment.ts  product intelligence
+  enrichment.ts  Product Intelligence
   brand.ts       Brand Brain
   search.ts      discovery
   outfits.ts     styling, ranking, judging, explanation
-  looks.ts       merchant-confirmed looks and the outfit graph
+  looks.ts       the Look Builder and the outfit graph
+  jobs.ts        durable job state
+  scheduling.ts  idempotent scheduling and retry decisions
+  webhooks.ts    Shopify delivery identity and ordering
+  billing.ts     Stripe, rate limiting, the event ledger
   lib/           pure logic: intent, compatibility, taxonomy, judging, retry
   http.ts        storefront, merchant, Shopify and Stripe HTTP surface
 
-/frontend        the storefront runtime — one file, Web Component + Shadow DOM
-  tests/         layout and outage suites against real device profiles
+/frontend        the storefront runtime — Web Component + Shadow DOM
+  tests/         layout, coverage and outage suites, real device profiles
 
 /extensions      the Shopify theme app extension (app embed block)
 
-/dashboard       the merchant console (Next.js, server components only —
-                 the merchant token never reaches the browser)
+/dashboard       the merchant console (Next.js, server components only)
 
 /backend         SUPERSEDED. The original Python prototype, kept for
                  history and used by nothing in the shipping path.
@@ -347,8 +393,8 @@ Stated explicitly, because each of these is a plausible misreading:
 ### Reliability
 
 Disc runs inside other people's storefronts, so failure modes matter more
-than features. Each of these is documented with its failure mode, the
-invariant introduced, the test that proves it, and how to roll it back:
+than features. Each document below records a failure mode, the invariant
+introduced, the test that proves it, and how to roll it back.
 
 | | |
 | --- | --- |
@@ -365,22 +411,43 @@ invariant introduced, the test that proves it, and how to roll it back:
 
 - [`CLAUDE.md`](CLAUDE.md) — how the system is built, for anyone working
   on it
-- [`Disc.md`](Disc.md) — the original implementation spec; code comments
-  reference its section numbers
+- [`Disc.md`](Disc.md) — the master build spec; code comments reference
+  its section numbers
 - [`Disc audit.md`](Disc%20audit.md) — the traced gap analysis against
   that spec
 
-### Verification
+---
+
+## Development and testing
 
 ```bash
 npm run verify     # typecheck, lint, unit, integration, storefront outage suite
 ```
 
-The layout suites and the dashboard suite are run separately because they
-drive a browser:
+Browser-driving suites are run separately because they take minutes
+rather than seconds:
 
 ```bash
 node frontend/tests/devices_test.js    # fits across 14 real device profiles
 node frontend/tests/coverage_test.js   # can a shopper see and tap every control
 cd dashboard && npm run verify         # typecheck, build, render suite
 ```
+
+---
+
+## Known limitations
+
+- **Compare is not implemented**, though it is one of the four verbs in
+  the definition.
+- **The merchant-controlled entry point is not implemented.** The
+  configuration value exists; the runtime ignores it.
+- **Not yet deployed.** The Convex backend is written and tested but
+  needs a Convex project; the Shopify app needs a Partner Dashboard
+  `client_id`.
+- **`/backend` is dead weight** — a superseded Python prototype kept for
+  history. Nothing in the shipping path depends on it.
+- **`convex/http.ts` is large** (~1,000 lines) and would split cleanly
+  into route modules.
+- **Dark mode follows the shopper's OS preference**, not the actual
+  lightness of the merchant's page, which can read low-contrast on a
+  light-only storefront.

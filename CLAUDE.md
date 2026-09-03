@@ -31,17 +31,27 @@ Shopify stays the source of truth for price, currency, variants,
 availability and URLs; Disc adds inference *about* those products, in
 separate tables, plus the experience that helps someone choose.
 
-**Two distribution models exist in this repo, and the newer one is the
-target.** A theme app extension lives in `extensions/disc-boutique/` —
-an app embed block that identifies the store from
-`shop.permanent_domain`, so the merchant pastes nothing. It is built and
-kept in sync by `scripts/sync-extension-asset.mjs` (checked by
-`npm run verify`), but **not published**: that needs a Shopify Partner
-account, app registration and review. The older self-serve path — sign
-up on our own site, paste one `<script>` line into the theme — is what
-the "Distribution" section below describes, and it still works. Don't
-delete either without checking; see `PRODUCTION_P2_ARCHITECTURE.md` for
-what is actually outstanding.
+**Distribution is a custom Shopify app, and `shopify.app.toml` is the
+authority on it.** Custom distribution installs on one store at a time
+with **no App Store review**, which is what lets Disc reach its first
+merchants without waiting on approval. It still supports theme app
+extensions, so the merchant gets the proper install: enable the app embed
+in the theme editor, no pasted snippet and no edited `theme.liquid`. One
+documented consequence — custom apps cannot use Shopify's Billing API,
+so billing stays on Stripe. That is the constraint of this distribution
+type, not a workaround.
+
+The extension lives in `extensions/disc-boutique/` — an app embed block
+that identifies the store from `shop.permanent_domain`, kept in sync by
+`scripts/sync-extension-asset.mjs` (checked by `npm run verify`). What is
+outstanding is operational rather than architectural: create the app in
+the Partner Dashboard for a `client_id`, fill in the deployed URLs, and
+`shopify app deploy`.
+
+**The "Distribution" section further down describes the PROTOTYPE's
+model** — self-serve signup, a site key, a pasted `<script>` line — which
+belongs to `/backend` and is superseded. It is retained as history, not
+as the shipping path. See `PRODUCTION_P2_ARCHITECTURE.md`.
 
 The shape of the experience is modelled on Brunello Cucinelli's "AI
 Online Boutique" (the reference the user supplied as a screen recording):
@@ -363,10 +373,15 @@ them. `_hit_to_result` reads every one of these defensively, so a shop
 table written before these fields existed degrades to a plain result
 rather than 500ing the search.
 
-### Distribution — how one paste becomes that store's AI
+### Distribution (SUPERSEDED) — the prototype's self-serve script tag
 
-This is what makes Disc *that particular store's* AI rather than a demo,
-and it happens without an app install:
+> **This describes `/backend`, the superseded Python prototype, and is
+> kept as history.** The shipping model is the custom Shopify app plus
+> the theme app extension described at the top of this file: the merchant
+> installs an app and flips a switch, and pastes nothing. Do not build
+> against what follows.
+
+How one paste became that store's Disc, without an app install:
 
 1. **Signup**: merchant enters their domain at `GET /`. `POST /sites`
    normalises it and probes `https://{domain}/products.json` *before

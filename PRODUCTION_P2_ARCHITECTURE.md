@@ -63,10 +63,11 @@ that breaks a store.
 
 | Item | Kind | Blocking? |
 | --- | --- | --- |
-| Shopify Partner account, app registration | external | yes, for any real install |
+| Partner Dashboard app, for a `client_id` | operational | yes, for any real install |
+| Deployed URLs filled into `shopify.app.toml` | operational | yes |
 | `shopify app deploy` | operational | yes |
-| App review | external, slow | only for a public listing |
-| Shopify Billing migration | code + product decision | only for a public listing (`lib/billing.ts` records why) |
+| App review | **not required** | `shopify.app.toml` records custom distribution — one store at a time, no App Store review |
+| Shopify Billing migration | code + product decision | only if a *public* listing is chosen later. Custom apps cannot use the Billing API — that is why billing is Stripe |
 | `floating_button` placement | **code** | yes, for the product direction |
 | Entry-point copy | product decision | yes |
 
@@ -277,7 +278,8 @@ than after.
 | Document | Says | Actually |
 | --- | --- | --- |
 | `CLAUDE.md` | "merchants install a single `<script>` tag"; "sold direct, not through the App Store"; theme app extension needed "for a listing" | the theme app extension exists and is the delivery path; the asset sync is in `npm run verify` |
-| `PRODUCT_DIRECTION.md` | P2 = "Shopify App Embed distribution, replacing the pasted script tag" | largely done; what remains is Partner registration, deploy, and the entry point |
+| `PRODUCT_DIRECTION.md` | P2 = "Shopify App Embed distribution, replacing the pasted script tag" | largely done; what remains is the Partner Dashboard app, deploy, and the entry point |
+| both, and this audit's own first draft | publishing needs "app review", "external and slow" | `shopify.app.toml` sets **custom** distribution — no App Store review. The remaining steps are operational |
 
 Both should be corrected as part of P2 rather than left to mislead the
 next reader. The `/backend` Python prototype and the "Distribution"
@@ -287,8 +289,9 @@ section of `CLAUDE.md` describe a model the code has already left.
 
 ## 8. Recommended P2 sequence
 
-Ordered so that each step is independently verifiable and none depends on
-an external account that may take weeks.
+Ordered so that each step is independently verifiable. Note that P2.7 is
+lighter than first assessed: custom distribution needs no app review, so
+it is a Partner Dashboard app plus a deploy rather than a review cycle.
 
 | Step | Scope | External dependency |
 | --- | --- | --- |
@@ -298,7 +301,7 @@ an external account that may take weeks.
 | **P2.4** | Video ingest as a durable job (`content_ingest`, `video_analysis`) using P1.1–P1.3 primitives; scene/timestamp model | none |
 | **P2.5** | Merchant Content section in the dashboard: add, review, confirm, edit, archive, see usage | none |
 | **P2.6** | Content-aware decision engine: capped additive evidence with the two cold-start assertions | none |
-| **P2.7** | Partner registration, `shopify app deploy`, listing | **yes — start now, in parallel** |
+| **P2.7** | Partner Dashboard app for a `client_id`, deployed URLs, `shopify app deploy` | **yes — start now, in parallel** |
 
 Corrections to `CLAUDE.md` and `PRODUCT_DIRECTION.md` belong with P2.1.
 
