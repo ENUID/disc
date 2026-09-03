@@ -13,7 +13,7 @@
     "verify": "npm run typecheck && npm run lint && npm test && npm run test:integration && npm run test:browser && node scripts/sync-extension-asset.mjs --check",
     "sync:extension": "node scripts/sync-extension-asset.mjs",
     "eval": "vitest run convex/evaluation.itest.ts --reporter=verbose",
-    "test:browser": "node frontend/tests/outage_test.js"
+    "test:browser": "node frontend/tests/outage_test.js && node frontend/tests/entry_test.js"
   },
   "repository": {
     "type": "git",

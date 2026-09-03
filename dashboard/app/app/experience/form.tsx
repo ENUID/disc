@@ -107,6 +107,21 @@ export function ExperienceForm({ config }: { config: WidgetConfig }) {
         value={config.placement}
       />
 
+      <label className="field">
+        <span className="lab">Button label</span>
+        <span className="help">
+          The wording on the floating button, for shoppers who have not opened
+          Disc yet. Only used with the floating button placement.
+        </span>
+        <input
+          type="text"
+          name="entryLabel"
+          defaultValue={config.entryLabel}
+          maxLength={32}
+          placeholder="Disc"
+        />
+      </label>
+
       <div className="field">
         <span className="lab">What shoppers can ask for</span>
         <span className="help">

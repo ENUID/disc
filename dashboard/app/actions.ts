@@ -65,6 +65,7 @@ export async function saveExperience(
     enabled: form.get("enabled") === "on",
     placement: form.get("placement") as WidgetConfig["placement"],
     greeting: String(form.get("greeting") ?? "").slice(0, 120),
+    entryLabel: String(form.get("entryLabel") ?? "").slice(0, 120),
     workflows: form.getAll("workflows").map(String),
     design: {
       density: form.get("density") as WidgetConfig["design"]["density"],

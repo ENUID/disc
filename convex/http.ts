@@ -266,6 +266,12 @@ http.route({
       catalog_status: config.catalogStatus,
       widget_status: config.widgetStatus,
       brand_tokens: config.brandTokens,
+      // The same config the domain route serves, from the same function.
+      // Omitting it here would have made where Disc appears depend on
+      // which boot path an install happened to use — a merchant who set
+      // a floating button would have got a docked bar on a key-based
+      // install and never known why.
+      widget_config: config.widgetConfig,
     });
   }),
 });

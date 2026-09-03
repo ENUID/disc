@@ -71,6 +71,19 @@
       _keyFromScriptUrl() ||
       null,
     searchSelectors: 'input[name="q"], input[type="search"]',
+    /**
+     * How Disc presents itself on the storefront while it is closed
+     * (spec §74 `placement`). The merchant chooses; the server validates
+     * against a closed set and sends it down with the boot config.
+     *
+     *   bottom_bar      the docked bar, always present. The default, and
+     *                   what every install had before this existed.
+     *   floating_button a small labelled control that reveals the bar.
+     *
+     * Whichever is chosen, there is one Disc behind it: placement decides
+     * how a shopper reaches the experience, never what the experience is.
+     */
+    placement: "bottom_bar",
     scanIntervalMs: 500,
     debounceMs: 300,
     resultLimit: 12,
@@ -116,7 +129,12 @@
       canvas: "#F4EEE9",
       ink: "#1D1D1F",
       serif: "'Canela', 'Didot', Georgia, 'Times New Roman', serif",
+      // Read INSIDE Disc, as the bar's placeholder.
       greeting: "What are you looking for?",
+      // Read BEFORE Disc opens, on the floating entry control. A
+      // different question at a different moment, so a different field —
+      // see convex/lib/widget-config.ts.
+      entryLabel: "Disc",
       resultsHeading: "Get inspired by these creations",
       loadingMessages: ["Gathering inspiration", "Crafting your experience"],
       // A single continuous line drawn stroke-by-stroke while results are
@@ -211,7 +229,9 @@
       this._input = document.createElement("textarea");
       this._input.className = "disc-input";
       this._input.rows = 1;
-      this._input.placeholder = "What are you looking for?";
+      // The merchant's greeting, which until now was delivered, stored
+      // in DISC_THEME, and then never read by anything.
+      this._input.placeholder = DISC_THEME.greeting;
       this._input.setAttribute("aria-label", "Search products");
 
       this._clearBtn = document.createElement("button");
@@ -265,8 +285,27 @@
       this._bar.appendChild(this._tools);
       this._bar.appendChild(this._fileInput);
 
+      // --- the floating entry point ----------------------------------
+      // Built unconditionally and hidden unless the merchant asked for
+      // it, so placement is a display decision rather than a different
+      // DOM. It sits where the idle bar sits, because it stands in for
+      // the idle bar — a merchant switching placement should not find
+      // Disc has moved to a different corner of their storefront.
+      //
+      // The caption is set with textContent, never innerHTML: it is
+      // merchant text, and this is the one place it reaches a page.
+      this._entry = document.createElement("button");
+      this._entry.type = "button";
+      this._entry.className = "disc-entry";
+      this._entry.hidden = true;
+      this._entryLabel = document.createElement("span");
+      this._entryLabel.className = "disc-entry-label";
+      this._entryLabel.textContent = DISC_THEME.entryLabel;
+      this._entry.appendChild(this._entryLabel);
+
       wrap.appendChild(this._canvas);
       wrap.appendChild(this._bar);
+      wrap.appendChild(this._entry);
 
       this._root.appendChild(style);
       this._root.appendChild(wrap);
@@ -284,7 +323,7 @@
       this.style.pointerEvents = "none";
 
       this._keyboardOffset = 0;
-      this._updateBarOffset();
+      this._applyPlacement();
       this._bindKeyboardOffset();
 
       bindPointerTracking(this._bar);
@@ -327,6 +366,44 @@
       this._bar.style.transition = "bottom 0.45s cubic-bezier(0.22, 1, 0.36, 1)";
     }
 
+    /**
+     * Show whichever entry point the merchant chose — and only one.
+     *
+     * "No double search bars" is the widget's oldest rule, and a
+     * floating button is a second way in, so it is subject to it: the
+     * button is Disc's presence while Disc is closed, the bar is its
+     * presence while Disc is open, and the two are never on screen
+     * together. On `bottom_bar` the button simply never appears and the
+     * bar behaves exactly as it always has.
+     */
+    _applyPlacement() {
+      var floating = CONFIG.placement === "floating_button";
+      this._entryLabel.textContent = DISC_THEME.entryLabel;
+      this._entry.hidden = !floating || this.isOpen();
+      if (floating) this._bar.hidden = !this.isOpen();
+      this._updateBarOffset();
+    }
+
+    /**
+     * The floating control's one job: hand the shopper the same Disc the
+     * docked bar hands them.
+     *
+     * It reveals the bar and focuses it rather than opening the canvas,
+     * because the canvas has nothing to show until there is a query —
+     * opening it here would mean inventing an idle screen, and the
+     * reference has none. From this point the flow is byte-for-byte the
+     * `bottom_bar` flow: type, canvas opens, results, detail.
+     *
+     * Escape (and closing the canvas) collapses back to the button, so
+     * this is reversible without a dismiss control of its own.
+     */
+    openEntry() {
+      this._entry.hidden = true;
+      this._bar.hidden = false;
+      this._updateBarOffset();
+      this._input.focus();
+    }
+
     _bindEvents() {
       var self = this;
       var debounced = debounce(function () {
@@ -354,6 +431,15 @@
 
       this._sendBtn.addEventListener("click", function () {
         self._runSearch();
+      });
+
+      // Deliberately no bindPressSpring() here, unlike the bar and the
+      // send button. That helper writes el.style.transform every frame,
+      // and this control is centred with transform: translateX(-50%) —
+      // the spring would overwrite the centring and slide the button to
+      // the right edge on first press.
+      this._entry.addEventListener("click", function () {
+        self.openEntry();
       });
 
       this._clearBtn.addEventListener("click", function () {
@@ -512,7 +598,9 @@
     // -----------------------------------------------------------------
     openCanvas() {
       this._canvas.classList.add("disc-canvas--visible");
-      this._updateBarOffset();
+      // After the class, so isOpen() is already true: the bar docks and
+      // the floating button stands down in the same pass.
+      this._applyPlacement();
       this.style.pointerEvents = "auto";
       // The store shouldn't scroll behind a full takeover.
       document.documentElement.style.overflow = "hidden";
@@ -524,7 +612,10 @@
       this._canvas.classList.remove("disc-canvas--visible");
       this.style.pointerEvents = "none";
       document.documentElement.style.overflow = "";
-      this._updateBarOffset();
+      // After the class is gone, so isOpen() is false: a floating-button
+      // storefront collapses back to the button rather than being left
+      // with a bar the shopper never asked to keep.
+      this._applyPlacement();
       this._stopLoadingRotation();
       this._view = null;
       this._backBtn.hidden = true;
@@ -1708,6 +1799,52 @@
     }
     .disc-input::placeholder { color: var(--disc-text-secondary); }
 
+    /* ---------------- the floating entry point ----------------
+       Same glass and the same resting position as the idle bar, because
+       it stands in for the idle bar. Every colour derives from
+       --disc-text or a neutral translucent grey: a merchant's canvas may
+       be near-black, and a hardcoded white pill would be invisible on
+       it. */
+    .disc-entry {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: max(20px, calc(23dvh + env(safe-area-inset-bottom, 0px)));
+      max-width: calc(100vw - 32px);
+      pointer-events: auto;
+      z-index: 5;
+      isolation: isolate;
+      display: flex; align-items: center; justify-content: center;
+      padding: 15px 26px;
+      border-radius: 9999px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      font: inherit;
+      font-size: 15px; font-weight: 500; letter-spacing: 0.01em;
+      color: var(--disc-text);
+      background-image:
+        linear-gradient(180deg, var(--disc-glass-top), var(--disc-glass-bottom)),
+        linear-gradient(var(--disc-rim-angle), var(--disc-rim-1), var(--disc-rim-2) 35%, var(--disc-rim-2) 65%, var(--disc-rim-1));
+      background-origin: padding-box, border-box;
+      background-clip: padding-box, border-box;
+      backdrop-filter: blur(30px) saturate(200%);
+      -webkit-backdrop-filter: blur(30px) saturate(200%);
+      box-shadow:
+        0 0 0 1px rgba(0,0,0,0.05),
+        0 34px 64px -16px var(--disc-shadow-ambient),
+        0 10px 22px -8px var(--disc-shadow-contact),
+        inset 0 1px 0 rgba(255,255,255,0.65),
+        inset 0 -1px 0 rgba(0,0,0,0.05);
+      text-shadow: 0 1px 2px var(--disc-text-shadow);
+    }
+    /* A long caption ellipses rather than wrapping the pill into two
+       lines or pushing it past the viewport. The server caps the value
+       at 32 characters; this is what happens at 32 wide ones. */
+    .disc-entry-label {
+      display: block; max-width: 100%;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+
     /* The + menu: a nested pill that replaces the row. */
     .disc-tools { display: flex; align-items: center; gap: 4px; height: 52px; }
     .disc-tool {
@@ -1834,6 +1971,38 @@
    * closed set on the server. A merchant (or a model) cannot put
    * arbitrary CSS on a storefront through this path.
    */
+  /**
+   * Bound the merchant's entry-point caption, again, in the browser.
+   *
+   * The server already did this (convex/lib/widget-config.ts), and this
+   * is not a second source of truth — it is the same rule applied where
+   * the string actually becomes pixels. The value crosses a CDN, a
+   * cache and a merchant's own network to get here, and the cost of the
+   * two disagreeing is a broken control on a brand's storefront, so the
+   * renderer bounds what it renders.
+   *
+   * Returns null for anything unusable, and the caller keeps the
+   * default rather than rendering an empty button.
+   */
+  var ENTRY_LABEL_MAX = 32;
+  // C0, DEL + C1, zero-width and bidi controls, line/paragraph
+  // separators. Replaced with a space, not deleted, so the words
+  // either side do not fuse.
+  var ENTRY_LABEL_STRIP =
+    /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g;
+  function normaliseEntryLabel(value) {
+    if (typeof value !== "string") return null;
+    var cleaned = value.replace(ENTRY_LABEL_STRIP, " ").replace(/\s+/g, " ").trim();
+    if (!cleaned) return null;
+    if (cleaned.length <= ENTRY_LABEL_MAX) return cleaned;
+    var cut = cleaned.slice(0, ENTRY_LABEL_MAX);
+    // Never end on half of a surrogate pair — a lone surrogate renders
+    // as U+FFFD, so an over-long emoji caption would be cut to a
+    // replacement glyph rather than to letters.
+    if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+    return cut.trim();
+  }
+
   function applyBrand(status) {
     if (!status) return;
 
@@ -1856,6 +2025,15 @@
       if (typeof widget.greeting === "string" && widget.greeting) {
         DISC_THEME.greeting = widget.greeting;
       }
+      // Re-checked against the same closed set the server validates
+      // against. Not distrust of the server — distrust of everything
+      // between it and here: a stale CDN copy, a merchant's own proxy, a
+      // half-deployed backend. An unrecognised value must resolve to the
+      // placement Disc has always had, never to no entry point at all.
+      CONFIG.placement =
+        widget.placement === "floating_button" ? "floating_button" : "bottom_bar";
+      var label = normaliseEntryLabel(widget.entryLabel);
+      if (label) DISC_THEME.entryLabel = label;
       CONFIG.workflows = Array.isArray(widget.workflows) ? widget.workflows : null;
       CONFIG.design = widget.design || null;
     }

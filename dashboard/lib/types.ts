@@ -49,7 +49,10 @@ export type CatalogHealth = {
 export type WidgetConfig = {
   enabled: boolean;
   placement: "bottom_bar" | "floating_button";
+  /** Read inside Disc, as the bar's placeholder. */
   greeting: string;
+  /** Read before Disc opens, on the floating entry control. */
+  entryLabel: string;
   workflows: string[];
   design: {
     density: "airy" | "balanced" | "dense";

@@ -21,7 +21,8 @@ P2's real weight sits almost entirely on the content architecture.
 **The entry point the product direction asks for is half-built.**
 `placement: "floating_button"` is a valid, merchant-settable, persisted
 config value that `frontend/disc-widget.js` never reads. A merchant who
-chooses it today gets a docked bar.
+chooses it today gets a docked bar. *(Closed in P2.1 — see the finding
+below. Everything else in this document is still plan.)*
 
 **`looks` is already the content system** — for exactly one content type.
 The pipeline (media → detection → candidate products → merchant approval
@@ -68,23 +69,35 @@ that breaks a store.
 | `shopify app deploy` | operational | yes |
 | App review | **not required** | `shopify.app.toml` records custom distribution — one store at a time, no App Store review |
 | Shopify Billing migration | code + product decision | only if a *public* listing is chosen later. Custom apps cannot use the Billing API — that is why billing is Stripe |
-| `floating_button` placement | **code** | yes, for the product direction |
+| `floating_button` placement | ~~code~~ | **done in P2.1** |
 | Entry-point copy | product decision | yes |
 
-**Only one of those is code**, and it is the entry point.
+**Only one of those was code**, and it was the entry point — built in
+P2.1. What is left in this table is operational and a copy decision.
 
-### Finding P2-A: `placement` is declared and ignored
+### Finding P2-A: `placement` is declared and ignored — **CLOSED in P2.1**
 
 `convex/lib/widget-config.ts` defines
 `PLACEMENTS = ["bottom_bar", "floating_button"]`. The value validates,
 persists, and is exposed to the merchant. `frontend/disc-widget.js`
 contains no reference to `placement` at all.
 
+*(Fixed. `CONFIG.placement` is read from the boot config and
+`_applyPlacement()` renders it; `entryLabel` was added as the caption
+field this finding said was missing. Two things the fix turned up that
+the audit had not: `/sites/{key}/status` omitted `widget_config`
+entirely, so which entry point a shopper saw depended on which boot path
+the install used; and `storefrontStatus` served the stored config
+verbatim, so a tenant who had never opened Experience received `null` —
+a second source of truth for what Disc looks like — and any config saved
+before a field existed would have arrived missing it. Both are now
+parsed on read from the one function.)*
+
 This is precisely the "Personalized Style" entry point:
 
 ```
 merchant's storefront
-      ↓  small branded control        ← floating_button, unimplemented
+      ↓  small branded control        ← floating_button, built in P2.1
 Disc experience                        ← already built
 ```
 
@@ -95,6 +108,14 @@ Stylist", "Discover Your Style" — need a config field to live in, and
 that field is merchant-visible text rendered into a storefront, so it
 must go through `parseWidgetConfig`'s validation like everything else
 (spec §65: design tokens, never free-form).
+
+*(P2.1 added it as `entryLabel`, kept deliberately separate from
+`greeting` — one is read before Disc opens and one after, so collapsing
+them would put a question on a button. It is bounded twice, once in
+`parseWidgetConfig` and again in the widget that renders it, and it
+defaults to the product name so that this document's copy question
+stays open rather than being settled by whichever candidate reached the
+default first.)*
 
 ---
 
@@ -295,7 +316,7 @@ it is a Partner Dashboard app plus a deploy rather than a review cycle.
 
 | Step | Scope | External dependency |
 | --- | --- | --- |
-| **P2.1** | Entry point: implement `floating_button`, add a validated label field, keep P0.1's fail-closed mount | none |
+| ~~**P2.1**~~ **done** | Entry point: implement `floating_button`, add a validated label field, keep P0.1's fail-closed mount | none |
 | **P2.2** | Generalise `looks` → `content`: media type, provenance, external identity, bounded `detected`, multi-asset. Existing looks are images with an unchanged meaning | none |
 | **P2.3** | `contentProducts` with anchors; split presence from compatibility; edge derivation becomes scope-explicit | none |
 | **P2.4** | Video ingest as a durable job (`content_ingest`, `video_analysis`) using P1.1–P1.3 primitives; scene/timestamp model | none |
@@ -311,9 +332,11 @@ Corrections to `CLAUDE.md` and `PRODUCT_DIRECTION.md` belong with P2.1.
 
 These are the user's to make; each changes what gets built.
 
-1. **Entry-point copy.** Which label, and is it merchant-editable or
-   fixed? Merchant-editable means validated, length-capped, and rendered
-   into a storefront.
+1. **Entry-point copy.** Which label? *Half-answered by P2.1: it is
+   merchant-editable, validated and length-capped, and defaults to the
+   product name rather than to any candidate — so which words to use is
+   still open, and is now a question to test on a storefront rather than
+   a code change.*
 2. **Rename or extend?** `looks` → `content` is a clean name and nothing
    is deployed, so there is no migration cost — but every reference,
    test, dashboard route and doc changes with it. Extending in place

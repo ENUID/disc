@@ -1,5 +1,6 @@
 import { Doc, Id } from "../_generated/dataModel";
 import { QueryCtx, MutationCtx } from "../_generated/server";
+import { parseWidgetConfig, type WidgetConfig } from "./widget-config";
 
 /**
  * Tenant resolution — the single chokepoint.
@@ -79,7 +80,7 @@ export type StorefrontStatus = {
   catalogStatus: Tenant["catalogStatus"];
   widgetStatus: Tenant["widgetStatus"];
   brandTokens: unknown;
-  widgetConfig: unknown;
+  widgetConfig: WidgetConfig;
 };
 
 export function storefrontStatus(
@@ -92,7 +93,23 @@ export function storefrontStatus(
     catalogStatus: tenant.catalogStatus,
     widgetStatus: tenant.widgetStatus,
     brandTokens: tenant.brandTokens ?? null,
-    widgetConfig: tenant.widgetConfig ?? null,
+    // Parsed, not passed through. This used to hand back
+    // `tenant.widgetConfig ?? null` — the stored value verbatim — which
+    // made the storefront's copy of the config a different thing from
+    // the merchant's, in two ways that both bite:
+    //
+    //   a tenant who has never opened Experience has no stored config at
+    //   all, so the storefront received `null` and had to invent its own
+    //   defaults — a second source of truth for what Disc looks like;
+    //
+    //   a config stored before a field existed is missing that field, so
+    //   every merchant installed before today would have had no
+    //   `entryLabel` and the entry point would have rendered blank.
+    //
+    // Parsing here means the storefront is always handed a complete,
+    // validated config from the same function the dashboard reads, and
+    // adding a field is not a migration.
+    widgetConfig: parseWidgetConfig(tenant.widgetConfig),
   };
 }
 

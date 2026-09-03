@@ -22,10 +22,51 @@ export const MOTIONS = ["subtle", "standard", "none"] as const;
 export const CARD_STYLES = ["editorial", "clean", "bold"] as const;
 export const CORNER_RADII = ["none", "small", "medium", "large"] as const;
 
+export const GREETING_MAX = 80;
+
+/**
+ * The caption on the storefront entry control.
+ *
+ * Short on purpose. This is a control on someone else's storefront, next
+ * to their own navigation, and it has to survive a 320px phone without
+ * wrapping or being ellipsed — 32 characters comfortably holds every
+ * candidate in `PRODUCT_DIRECTION.md` ("Discover Your Style" is 19).
+ */
+export const ENTRY_LABEL_MAX = 32;
+
+/**
+ * Deliberately the product name, not a chosen line of marketing copy.
+ *
+ * `PRODUCT_DIRECTION.md` records the entry-point copy as undecided —
+ * "Your Style", "Personalized Style", "Personal Stylist", "Discover Your
+ * Style" — and says explicitly that it is "to be tested, not picked in
+ * code". Defaulting to one of those candidates would make this file the
+ * place that decision got made by accident. "Disc" names the thing the
+ * control opens and claims nothing, and because the field is
+ * merchant-editable, testing a candidate needs no code change.
+ */
+export const DEFAULT_ENTRY_LABEL = "Disc";
+
 export type WidgetConfig = {
   enabled: boolean;
   placement: Placement;
+  /**
+   * The in-bar placeholder — the first thing a shopper reads *inside*
+   * Disc, once it is open. Not the entry point's caption; see
+   * `entryLabel`.
+   */
   greeting: string;
+  /**
+   * The caption on the storefront entry control — what a shopper reads
+   * *before* Disc is open, and only when `placement` is
+   * `"floating_button"`.
+   *
+   * Kept separate from `greeting` because they are read at different
+   * moments and answer different questions. `greeting` asks the shopper
+   * something ("What are you looking for?"); `entryLabel` names a door.
+   * Collapsing them would put a question on a button.
+   */
+  entryLabel: string;
   /** Which shopper entry points are offered (spec §41, §43). */
   workflows: Workflow[];
   /** Maps to known design tokens; never arbitrary CSS (spec §65). */
@@ -45,6 +86,7 @@ export function defaultWidgetConfig(): WidgetConfig {
     enabled: false,
     placement: "bottom_bar",
     greeting: "What are you looking for?",
+    entryLabel: DEFAULT_ENTRY_LABEL,
     workflows: ["PRODUCT_SEARCH", "SIMILAR", "STYLE_PRODUCT", "COMPLETE_LOOK", "OUTFIT"],
     design: {
       density: "airy",
@@ -63,6 +105,47 @@ function oneOf<T extends readonly string[]>(
   return typeof value === "string" && (vocabulary as readonly string[]).includes(value)
     ? (value as T[number])
     : fallback;
+}
+
+/**
+ * Merchant free text on its way to a storefront.
+ *
+ * There is exactly one of these fields per rendered string, and both go
+ * through here, because "it is only a caption" is how unbounded text
+ * reaches other people's pages. Three separate hazards, in order:
+ *
+ *  - **Invisible characters are not inert.** A newline breaks a
+ *    single-line control's layout, a zero-width space defeats a length
+ *    check a human made by eye, and a bidi override (U+202E and
+ *    friends) reorders every character after it — so a label can read
+ *    one way in the dashboard and another on the storefront. They are
+ *    replaced with a space rather than deleted so that the words either
+ *    side do not fuse into one.
+ *  - **Length is capped after normalising, not before**, so the cap
+ *    counts characters a shopper can actually see.
+ *  - **The cut is by code point.** A plain `.slice()` can sever a
+ *    surrogate pair and leave a lone surrogate, which renders as U+FFFD
+ *    — a caption ending in a replacement glyph on a brand's storefront.
+ *
+ * Markup safety is not attempted here and must not be: escaping depends
+ * on the context the value lands in, so it belongs at render time. The
+ * storefront renders both of these through `textContent`, never
+ * `innerHTML`, which is why a string containing `<script>` is a string
+ * containing `<script>` and nothing more.
+ */
+function boundedText(value: unknown, max: number, fallback: string): string {
+  if (typeof value !== "string") return fallback;
+  const cleaned = value
+    .replace(
+      // C0, DEL + C1, zero-width and bidi controls, line/paragraph separators.
+      /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069\uFEFF]/g,
+      " ",
+    )
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return fallback;
+  const points = Array.from(cleaned);
+  return points.length > max ? points.slice(0, max).join("").trim() : cleaned;
 }
 
 /**
@@ -87,12 +170,12 @@ export function parseWidgetConfig(raw: unknown): WidgetConfig {
   return {
     enabled: typeof r.enabled === "boolean" ? r.enabled : base.enabled,
     placement: oneOf(PLACEMENTS, r.placement, base.placement),
-    // Bounded: this string is rendered on the storefront. Length is
-    // capped and the value is escaped at render time.
-    greeting:
-      typeof r.greeting === "string" && r.greeting.trim()
-        ? r.greeting.trim().slice(0, 80)
-        : base.greeting,
+    // Both of these are rendered on the storefront, so both are bounded.
+    // They are separate fields rather than one because they are read at
+    // different moments: `entryLabel` before Disc opens, `greeting`
+    // after.
+    greeting: boundedText(r.greeting, GREETING_MAX, base.greeting),
+    entryLabel: boundedText(r.entryLabel, ENTRY_LABEL_MAX, base.entryLabel),
     // An empty list would leave the widget with no way to be used at
     // all, which is a misconfiguration rather than a choice.
     workflows: workflows.length > 0 ? workflows : base.workflows,

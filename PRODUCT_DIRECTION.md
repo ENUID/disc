@@ -46,13 +46,18 @@ Entry-point copy is undecided. Candidates: "Your Style", "Personalized
 Style", "Personal Stylist", "Discover Your Style". To be tested, not
 picked in code.
 
+*(P2.1 built the field that holds it — `entryLabel`, validated,
+length-capped, merchant-editable — and deliberately defaulted it to the
+product name rather than to any candidate, so that testing one is a
+config change and this decision stays open.)*
+
 ---
 
 ## Five layers
 
 | Layer | What it is | State today |
 | --- | --- | --- |
-| 1. Storefront runtime | The entry point and the full-screen experience | exists (`frontend/disc-widget.js`); the theme app extension exists too — what is missing is the merchant-controlled **entry point** and publication |
+| 1. Storefront runtime | The entry point and the full-screen experience | exists (`frontend/disc-widget.js`); the theme app extension exists too, and the merchant-controlled **entry point** landed in P2.1 — what is left is publication |
 | 2. Decision engine | intent → retrieval → constraints → assembly → ranking → judge → diversity → explanation | exists, correct, **keep** |
 | 3. Brand knowledge layer | catalog + product intelligence + Brand Brain + looks + **content** + relationships | partially exists; content is the gap |
 | 4. Merchant control plane | install, onboard, correct, manage content, analytics, billing, preview, activate | exists; needs a Content section |
@@ -87,7 +92,7 @@ Retained without rewrite. This is the valuable foundation:
 
 | Phase | Change | Builds on (do not reinvent) |
 | --- | --- | --- |
-| P2 | Publish the theme app extension, and implement the merchant-controlled entry point (`placement: "floating_button"` is declared and unimplemented) | `extensions/disc-boutique/`, which already exists; the OAuth app in `convex/shopify/`; the existing widget as runtime |
+| P2 | Publish the theme app extension. ~~Implement the merchant-controlled entry point~~ — **done in P2.1**: `floating_button` renders, `entryLabel` is validated and delivered, and the storefront config is parsed on read so no install is left with a partial one | `extensions/disc-boutique/`, which already exists; the OAuth app in `convex/shopify/`; the existing widget as runtime |
 | P3 | First-class `content` model — image, video, lookbook, editorial, social_post, social_video, article | the `looks` table's shape and its approval semantics |
 | P4 | Content → product graph, with explicit relationships | `lookEdges`; `purgeTenant` + the `privacy.itest.ts` schema guard |
 | P5 | Video ingestion, scene and timestamp mapping | durable jobs; `looks.imageStorageId` file-deletion handling |
@@ -188,9 +193,10 @@ use Shopify's Billing API. Moving to Shopify Billing (0% of the first
 $1M, 15% above) is a consequence of choosing a *public* listing later,
 not a pending migration.
 
-The one piece of P2 that is *code* is the entry point:
-`placement: "floating_button"` is a valid, merchant-settable, persisted
-config value that `frontend/disc-widget.js` never reads. See
+The one piece of P2 that was *code* was the entry point:
+`placement: "floating_button"` was a valid, merchant-settable, persisted
+config value that `frontend/disc-widget.js` never read. **P2.1 closed
+that**, so what remains under this heading is entirely operational. See
 `PRODUCTION_P2_ARCHITECTURE.md`.
 
 **`looks` and `content` will overlap.** A look is an uploaded image with

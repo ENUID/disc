@@ -224,6 +224,9 @@ ES modules.
                        devices_test.js  -> does it fit, across 14 real device profiles
                        coverage_test.js -> can the shopper actually see and hit it
                        dormant_test.js  -> an inactive tenant must not cost a store its search
+                       outage_test.js   -> an unreachable backend must not either (P0.1)
+                       entry_test.js    -> the merchant's chosen entry point is the one
+                                           a shopper gets, and only their own
 /dashboard
   app/            -> the merchant console (spec §70-§76), Next.js App Router on Vercel.
                      Overview, Brand, Catalog, Looks, Experience, Analytics,
@@ -539,6 +542,10 @@ where 2,098 of 2,509 variants are genuinely sold out.
 
 **Critical rule: no double search bars.** Once Disc attaches, there is
 exactly one visible, usable search entry point on the page — Disc's own.
+This now includes Disc's own two: the floating entry control is Disc's
+presence while it is closed, the bar is its presence while it is open,
+and `_applyPlacement()` is the single place that guarantees they are
+never on screen together.
 
 1. `<disc-search-bar>` mounts and is immediately usable: `position:
    fixed`, horizontally centred, `width: min(640px, calc(100vw - 32px))`.
@@ -552,6 +559,31 @@ exactly one visible, usable search entry point on the page — Disc's own.
    `_updateBarOffset()` owns both, and is re-run on open/close — the
    keyboard offset stacks on top of whichever is current. A test asserts
    both positions against the values measured from the recording.
+
+   **Which of the two the merchant gets is `placement` (spec §74).**
+   `bottom_bar` is the above, unchanged and still the default.
+   `floating_button` hides the idle bar and shows `.disc-entry` in its
+   place — same position, same glass — captioned with the merchant's
+   `entryLabel`. Clicking it reveals the bar, focused; Escape and
+   closing the canvas collapse back to the button.
+
+   It deliberately does **not** open the canvas, because the canvas has
+   nothing to show until there is a query and the reference has no idle
+   screen. Inventing one would break "match the reference; don't add to
+   it". From the click onward the flow is identical to `bottom_bar`.
+
+   `entryLabel` is a separate field from `greeting` and must stay that
+   way: `greeting` is the bar's placeholder, read *inside* Disc;
+   `entryLabel` is a button caption, read *before* it opens. Both are
+   bounded by `boundedText` in `convex/lib/widget-config.ts` (control
+   and bidi characters neutralised, whitespace collapsed, capped by code
+   point) and again by `normaliseEntryLabel` in the widget, because the
+   renderer is the last place a caption can be bounded before it becomes
+   a brand's storefront. Rendered with `textContent`, never `innerHTML`.
+
+   `frontend/tests/entry_test.js` covers all of it — both placements,
+   two tenants on one backend, a malformed config, an unbounded label,
+   and that none of it weakens P0.1.
 2. Separately, a `DOMScanner` polls every 500ms for a native input
    matching `input[name="q"], input[type="search"]` (extend selectors as
    needed per-theme). Once found, the interval clears and the input is

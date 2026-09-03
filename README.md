@@ -247,14 +247,16 @@ Claims here are limited to what the repository implements.
   retry with crash recovery, Shopify and Stripe event ledgers,
   constant-time catalog health
 
+- A merchant-controlled **entry point**: Disc presents either as the
+  docked bar or as a small floating control carrying the merchant's own
+  wording, chosen in the dashboard. Both open the same experience, and
+  neither appears until this merchant's Disc is confirmed live
+
 **Named in the definition but not yet implemented:**
 
 - **Compare** is in the workflow vocabulary and understood by intent
   parsing, but there is no comparison handler and no comparison
   interface. Direction, not capability.
-- The merchant-controlled **entry point** is a persisted configuration
-  value (`placement: "floating_button"`) that the storefront runtime does
-  not yet read. Disc currently presents as a docked bar.
 
 ---
 
@@ -421,8 +423,13 @@ introduced, the test that proves it, and how to roll it back.
 ## Development and testing
 
 ```bash
-npm run verify     # typecheck, lint, unit, integration, storefront outage suite
+npm run verify     # typecheck, lint, unit, integration, storefront browser suites
 ```
+
+The browser suites inside `verify` are the two that need no backend —
+`outage_test.js` (Disc fails closed when it cannot reach its own backend)
+and `entry_test.js` (the merchant's chosen entry point is what a shopper
+actually gets). Both drive the widget from disk against a stub.
 
 Browser-driving suites are run separately because they take minutes
 rather than seconds:
@@ -439,8 +446,11 @@ cd dashboard && npm run verify         # typecheck, build, render suite
 
 - **Compare is not implemented**, though it is one of the four verbs in
   the definition.
-- **The merchant-controlled entry point is not implemented.** The
-  configuration value exists; the runtime ignores it.
+- **The entry point's wording is a merchant setting with a placeholder
+  default.** Which words work best — "Your Style", "Personal Stylist",
+  something else — is a question to be tested on real storefronts, not
+  answered in code, so the default is the product name and every
+  candidate is a config change.
 - **Not yet deployed.** The Convex backend is written and tested but
   needs a Convex project; the Shopify app needs a Partner Dashboard
   `client_id`.

@@ -93,6 +93,7 @@ const SCENARIOS = {
         enabled: true,
         placement: "bottom_bar",
         greeting: "What are you looking for?",
+        entryLabel: "Disc",
         workflows: ["PRODUCT_SEARCH", "SIMILAR", "COMPLETE_LOOK", "OUTFIT"],
         design: {
           density: "airy",
@@ -183,6 +184,7 @@ const SCENARIOS = {
         enabled: false,
         placement: "bottom_bar",
         greeting: "What are you looking for?",
+        entryLabel: "Disc",
         workflows: ["PRODUCT_SEARCH", "SIMILAR", "STYLE_PRODUCT", "COMPLETE_LOOK", "OUTFIT"],
         design: {
           density: "airy",
@@ -278,6 +280,7 @@ const SCENARIOS = {
         enabled: false,
         placement: "floating_button",
         greeting: "Ask us anything",
+        entryLabel: "Your Style",
         workflows: ["PRODUCT_SEARCH"],
         design: {
           density: "dense",
