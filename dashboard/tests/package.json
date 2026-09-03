@@ -1,0 +1,4 @@
+{
+  "//": "Scopes this suite to CommonJS, matching frontend/tests. The dashboard package is ESM for Next.js, which would otherwise reinterpret these require()-based files as ES modules.",
+  "type": "commonjs"
+}

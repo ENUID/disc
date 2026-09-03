@@ -1,0 +1,44 @@
+{
+  "name": "disc",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint convex --ext .ts",
+    "test": "tsx --test 'convex/**/*.test.ts'",
+    "dev": "convex dev",
+    "deploy": "convex deploy",
+    "test:integration": "vitest run",
+    "verify": "npm run typecheck && npm run lint && npm test && npm run test:integration && npm run test:browser && node scripts/sync-extension-asset.mjs --check",
+    "sync:extension": "node scripts/sync-extension-asset.mjs",
+    "eval": "vitest run convex/evaluation.itest.ts --reporter=verbose",
+    "test:browser": "node frontend/tests/outage_test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ENUID/disc.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ENUID/disc/issues"
+  },
+  "homepage": "https://github.com/ENUID/disc#readme",
+  "dependencies": {
+    "convex": "^1.45.0"
+  },
+  "devDependencies": {
+    "@edge-runtime/vm": "^5.0.0",
+    "@types/node": "^26.2.0",
+    "convex-test": "^0.0.56",
+    "eslint": "^10.9.0",
+    "tsx": "^4.23.12",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  },
+  "private": true,
+  "type": "module"
+}

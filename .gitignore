@@ -1,0 +1,21 @@
+# Generated LanceDB vector table — rebuild locally with `python ingest.py`
+backend/data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor/OS cruft
+.DS_Store
+
+# Node / Convex
+node_modules/
+.convex/
+
+# Next.js dashboard build output
+dashboard/.next/
+dashboard/out/
+dashboard/next-env.d.ts
+*.tsbuildinfo

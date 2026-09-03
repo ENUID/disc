@@ -1,0 +1,4 @@
+{
+  "//": "Scopes these Playwright suites back to CommonJS. The repo root gained \"type\": \"module\" for the Convex backend, which would otherwise reinterpret these existing require()-based files as ES modules. Keeps `node frontend/tests/<suite>.js` working exactly as documented, without editing the suites.",
+  "type": "commonjs"
+}
