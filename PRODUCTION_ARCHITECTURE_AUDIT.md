@@ -53,14 +53,14 @@ through the findings, so there is nothing to drift.
 | P0-1 storefront fails open | closed | P0.1 |
 | P0-2 no request timeouts | closed | P0.2 |
 | P1-1 nothing retries | closed | P1.3 — `PRODUCTION_RETRY_POLICY.md` |
-| P1-2 enrichment stalls 6h after a provider blip | **open** | `drainEnrichment` is an orchestration continuation and was deliberately not migrated in P1.2; it has no job and so no retry |
+| P1-2 enrichment stalls 6h after a provider blip | **closed** | P2.2 — enrichment is a `product_enrichment` job with the full retry policy; `drainEnrichment` is gone |
 | P1-3 `catalogHealth` full scans | closed | P1.6 — `PRODUCTION_CATALOG_HEALTH.md`. Maintained counters plus a scheduled rebuild; no query returning a number reads a corpus |
 | P1-4 no webhook idempotency, `sourceUpdatedAt` dead weight | closed | P1.4 — `PRODUCTION_WEBHOOKS.md`. Delivery dedupe on the webhook id, freshness on the resource version; `sourceUpdatedAt` is now read |
 | P1-5 Stripe events not deduplicated, replay re-grants access | closed | P1.5 — `PRODUCTION_STRIPE_EVENTS.md`. Ledger on `event.id`; a state-machine guard replaces the ordering signal Stripe does not provide (**UNKNOWN** recorded there) |
 | P1-6 no durable job state | closed | P1.1 — `PRODUCTION_JOB_STATE.md` |
 | P2-1 `/merchant/resync` no concurrency guard | closed | P1.2 — `PRODUCTION_IDEMPOTENCY.md` |
 | P2-2 … P2-6 | open | — |
-| P2-7 Brand Brain rebuilt on a timer | open | found during P1.2; deliberately not folded into a retry phase |
+| P2-7 Brand Brain rebuilt on a timer | **closed** | P2.2 — and the "not a correctness bug" note below was wrong; see `PRODUCTION_CATALOG_INTELLIGENCE.md` |
 | P3-1 no startup config validation | open | — |
 
 ---
@@ -335,7 +335,7 @@ feature.
 
 ---
 
-### P2-7 — The Brand Brain is rebuilt on a timer, not on change
+### P2-7 — The Brand Brain is rebuilt on a timer, not on change — **CLOSED in P2.2**
 
 *Added during P1.2. The Phase 0 pass missed it: I classified
 `buildBrandBrain` as an orchestration continuation and did not follow the
@@ -373,12 +373,28 @@ The version number is also merchant-visible, so a merchant who changed
 nothing still watches it climb, which makes it useless as a signal that
 anything happened.
 
-Not a correctness bug: a rebuilt brain is a valid brain, and §138's
-merchant-correction versioning depends on versions being cheap to create.
-The fix is a content check before `saveBrain` inserts — skip when the
-derived inputs are unchanged — plus a retention rule for `derived`
-versions no trace references. Both are behaviour changes to the brand
-path, so neither belongs in a scheduling phase.
+~~Not a correctness bug: a rebuilt brain is a valid brain, and §138's
+merchant-correction versioning depends on versions being cheap to
+create.~~
+
+**CORRECTED, AND CLOSED IN P2.2. That assessment was wrong.** This pass
+traced the schedule and the cost and stopped there; it did not check what
+`saveBrain` overwrites. It overwrites the merchant.
+
+`applyMerchantCorrection` writes `source: "merchant_corrected"` and its
+comment claims a later automatic rebuild "knows not to silently undo what
+a human said". Nothing read `source`. `buildBrandBrain` called `saveBrain`
+with `source: "derived"` unconditionally, demoting the corrected version
+and inserting a derived one. Measured: a merchant's correction survived
+about six hours. That is a direct violation of the invariant this
+repository states everywhere else — merchant confirmation is
+authoritative — and it makes the spend and storage findings above the
+less important half of this entry.
+
+Fixed in P2.2 by recording WHICH fields a merchant corrected
+(`brandBrains.correctedFields`) and carrying them forward through
+derived rebuilds, plus the content check this entry originally proposed
+(`tenants.brandInputHash`). See `PRODUCTION_CATALOG_INTELLIGENCE.md`.
 
 ---
 

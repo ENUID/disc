@@ -407,6 +407,7 @@ introduced, the test that proves it, and how to roll it back.
 | [`PRODUCTION_WEBHOOKS.md`](PRODUCTION_WEBHOOKS.md) | Shopify delivery identity and ordering |
 | [`PRODUCTION_STRIPE_EVENTS.md`](PRODUCTION_STRIPE_EVENTS.md) | replay-safe billing state |
 | [`PRODUCTION_CATALOG_HEALTH.md`](PRODUCTION_CATALOG_HEALTH.md) | aggregates instead of corpus scans |
+| [`PRODUCTION_CATALOG_INTELLIGENCE.md`](PRODUCTION_CATALOG_INTELLIGENCE.md) | enrichment that finishes, and merchant authority over derived knowledge |
 | [`PRIVACY.md`](PRIVACY.md) | what is stored, and what deletion guarantees |
 
 ### Other documents

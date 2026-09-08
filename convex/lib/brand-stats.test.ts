@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   aggregateStyleVector,
+  brandInputFingerprint,
   canDeriveBrand,
   computeBrandStats,
   deriveFormalityBand,
@@ -187,4 +188,94 @@ test("sampleTitles spreads across the catalog", () => {
   assert.equal(stats.sampleTitles[0], "P0");
   // Not the first 25 — the model should see the brand's range.
   assert.notEqual(stats.sampleTitles[24], "P24");
+});
+
+/**
+ * The Brand Brain rebuild gate (P2.2).
+ *
+ * The fingerprint decides whether an automatic rebuild spends a model
+ * call and inserts a version. Two properties make it a gate rather than
+ * a formality: identical inputs must produce an identical fingerprint,
+ * or nothing is ever recognised as unchanged and the timer-driven
+ * rebuild returns by the back door; and any input that changes what the
+ * brain says must change it, or a real change is silently ignored.
+ */
+
+test("identical inputs fingerprint identically", () => {
+  const products = Array.from({ length: 40 }, (_, i) =>
+    product({ title: `P${i}`, price: 100 + i }),
+  );
+  const profiles = Array.from({ length: 40 }, () =>
+    profile({ garment: "shirt", colorFamily: "black", formality: 3 }),
+  );
+
+  const a = brandInputFingerprint(computeBrandStats(products, profiles), "v1", "model-x");
+  const b = brandInputFingerprint(computeBrandStats(products, profiles), "v1", "model-x");
+  assert.equal(a, b);
+
+  // And stable across a re-derivation from equal-but-not-identical input,
+  // which is what a second read of the same catalog produces.
+  const c = brandInputFingerprint(
+    computeBrandStats([...products], [...profiles]),
+    "v1",
+    "model-x",
+  );
+  assert.equal(a, c);
+});
+
+test("anything that changes the brain changes the fingerprint", () => {
+  const products = Array.from({ length: 40 }, (_, i) => product({ title: `P${i}` }));
+  const profiles = Array.from({ length: 40 }, () =>
+    profile({ garment: "shirt", colorFamily: "black", formality: 3 }),
+  );
+  const base = brandInputFingerprint(
+    computeBrandStats(products, profiles),
+    "v1",
+    "model-x",
+  );
+
+  // A product added.
+  assert.notEqual(
+    brandInputFingerprint(
+      computeBrandStats([...products, product({ title: "New" })], profiles),
+      "v1",
+      "model-x",
+    ),
+    base,
+  );
+
+  // A profile that now says something different.
+  const shifted = [...profiles.slice(1), profile({ garment: "coat", formality: 5 })];
+  assert.notEqual(
+    brandInputFingerprint(computeBrandStats(products, shifted), "v1", "model-x"),
+    base,
+  );
+
+  // A changed prompt is a changed answer from identical statistics.
+  assert.notEqual(
+    brandInputFingerprint(computeBrandStats(products, profiles), "v2", "model-x"),
+    base,
+  );
+
+  // So is a changed model.
+  assert.notEqual(
+    brandInputFingerprint(computeBrandStats(products, profiles), "v1", "model-y"),
+    base,
+  );
+});
+
+test("the fingerprint carries no timestamp or identity", () => {
+  const products = Array.from({ length: 12 }, (_, i) => product({ title: `P${i}` }));
+  const fingerprint = brandInputFingerprint(
+    computeBrandStats(products, []),
+    "v1",
+    "model-x",
+  );
+
+  // A fingerprint containing a clock reading or a document id would be
+  // unique every time, which would turn this gate back into the
+  // unconditional rebuild it replaces — and it would do so silently,
+  // because everything else would still look correct.
+  assert.ok(!/\d{13}/.test(fingerprint), "no epoch-millisecond timestamp");
+  assert.ok(!/_creationTime|_id|lastEnrichedAt|updatedAt/.test(fingerprint));
 });

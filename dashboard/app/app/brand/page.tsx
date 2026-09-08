@@ -1,5 +1,5 @@
 import { apiGet } from "@/lib/api";
-import type { BrandBrain, Overview } from "@/lib/types";
+import type { BrandBrain, CatalogHealth, Overview } from "@/lib/types";
 import { BrainPill, Card, Empty, PageHead, Pill } from "@/components/ui";
 import { BrandCorrectionForm } from "./form";
 
@@ -32,9 +32,14 @@ const STYLE_LABELS: Record<string, string> = {
 };
 
 export default async function BrandPage() {
-  const [brand, overview] = await Promise.all([
+  const [brand, overview, catalog] = await Promise.all([
     apiGet<BrandBrain>("/merchant/brand"),
     apiGet<Overview | null>("/merchant/overview"),
+    // Read so the "not yet" state can say how far off it is. A merchant
+    // whose brand profile is missing needs to know whether Disc is still
+    // working or has stopped, and the enrichment counters are the only
+    // thing that answers that.
+    apiGet<CatalogHealth>("/merchant/catalog"),
   ]);
 
   const status = overview?.status.brandBrain ?? "pending";
@@ -58,8 +63,19 @@ export default async function BrandPage() {
           </div>
         ) : (
           <Empty>
-            Disc builds this once it understands enough of your catalog. Nothing
-            to do yet.
+            Disc builds this once it understands enough of your catalog.
+            {catalog.total > 0 && (
+              <>
+                {" "}
+                So far it understands {catalog.enriched} of {catalog.total}{" "}
+                products
+                {catalog.enriched < catalog.total
+                  ? " and is still working through the rest"
+                  : ""}
+                .
+              </>
+            )}{" "}
+            Nothing to do yet.
           </Empty>
         )}
       </>

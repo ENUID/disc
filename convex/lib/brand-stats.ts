@@ -212,6 +212,40 @@ export function deriveFormalityBand(
 export const MIN_PRODUCTS_FOR_BRAND = 8;
 export const MIN_COVERAGE_FOR_BRAND = 0.3;
 
+/**
+ * The exact inputs a derived Brand Brain depends on, as one string.
+ *
+ * Hashed by the caller and compared against `tenants.brandInputHash` to
+ * decide whether an automatic rebuild has anything to do. What
+ * participates, and why each thing does:
+ *
+ *   the whole BrandStats object   every derived field — style vector,
+ *                                 palette, formality band, product world
+ *                                 — is computed from it, and it is what
+ *                                 the model prompt is built from
+ *   promptVersion                 a changed prompt is a changed answer
+ *                                 from identical statistics
+ *   model                         so is a changed model
+ *
+ * What deliberately does NOT participate: timestamps, document ids,
+ * `lastEnrichedAt`, job ids, anything about WHEN the statistics were
+ * computed. Including any of those would make every fingerprint unique
+ * and turn this gate back into the unconditional rebuild it replaces.
+ *
+ * `computeBrandStats` is already deterministic for determinate reasons —
+ * `tally` breaks ties alphabetically, `sampleEvenly` walks a fixed
+ * stride, and the object is built in a fixed key order — so
+ * `JSON.stringify` over it is stable across runs. That property is what
+ * this depends on, and `brand-stats.test.ts` pins it.
+ */
+export function brandInputFingerprint(
+  stats: BrandStats,
+  promptVersion: string,
+  model: string,
+): string {
+  return JSON.stringify({ stats, promptVersion, model });
+}
+
 export function canDeriveBrand(stats: BrandStats): boolean {
   return (
     stats.productCount >= MIN_PRODUCTS_FOR_BRAND &&

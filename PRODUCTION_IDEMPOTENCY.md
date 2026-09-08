@@ -107,6 +107,14 @@ reason P1.3 exists.
 ### Why the class B sites were left alone
 
 They are **continuations of work already inside a job's boundary**, not
+> **Rows 6-8 are superseded by P2.2.** They were classified **B** —
+> orchestration continuations, not durable business work — and that was
+> wrong for the same reason the P2-7 assessment was wrong: the chain they
+> continued could stop without anything noticing. Enrichment and the
+> Brand Brain build are now class **A** and go through `enqueue` like
+> everything else. `drainEnrichment` no longer exists. See
+> `PRODUCTION_CATALOG_INTELLIGENCE.md`.
+
 new pieces of work someone requested. `drainEnrichment` re-scheduling
 itself is a bounded batch loop making progress through one backlog; it
 already has the guard that matters (`result.enriched > 0`, so a batch

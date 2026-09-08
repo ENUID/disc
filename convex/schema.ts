@@ -109,6 +109,61 @@ export default defineSchema({
     lastSyncedAt: v.optional(v.number()),
     catalogError: v.optional(v.string()),
 
+    /**
+     * Enrichment sweep state (P2.2).
+     *
+     * `staleProductIds` used to re-read the FRONT of the product index on
+     * every call — `take(limit * 4)`, no cursor — and `enrichBatch`
+     * inferred "is there more work" from a second front-of-index probe.
+     * Once the first few products were enriched that probe returned
+     * nothing, so the drain loop stopped. Measured: a 500-product catalog
+     * enriched 25 products and declared itself done, which held coverage
+     * at 0.05 and left `canDeriveBrand` permanently refusing.
+     *
+     * `enrichmentCursor` is a Convex pagination cursor, so a sweep is
+     * resumable across invocations, crashes and retries, and every
+     * product is visited exactly once per sweep. Absent means "start at
+     * the beginning of the catalog" — which is also what a completed
+     * sweep resets to.
+     *
+     * `enrichmentSweepEnriched` counts what the CURRENT sweep has
+     * actually enriched. It is the signal that decides whether finishing
+     * a sweep is worth a Brand Brain build at all, and it is reset when
+     * a sweep starts over.
+     */
+    enrichmentCursor: v.optional(v.string()),
+    enrichmentSweepEnriched: v.optional(v.number()),
+
+    /**
+     * Which sweep this is. Incremented when a sweep finishes.
+     *
+     * Part of the enrichment idempotency key, and load-bearing rather
+     * than decorative. A completed sweep resets the cursor to the start
+     * and the enriched count to zero — so without a generation, the first
+     * window of the NEXT sweep derives exactly the key the first window
+     * of the previous one used, deduplicates into that finished job, and
+     * schedules nothing. The effect is that a catalog enriches once after
+     * install and then never again, which is a quieter version of the bug
+     * this phase exists to fix.
+     */
+    enrichmentSweep: v.optional(v.number()),
+
+    /**
+     * Fingerprint of the inputs the current Brand Brain was derived from.
+     *
+     * The rebuild trigger. Before P2.2 the brain was rebuilt on a timer:
+     * the six-hourly resync scheduled a drain unconditionally, the drain
+     * scheduled a build unconditionally, and `saveBrain` inserted a new
+     * version unconditionally — so every tenant paid for a model call and
+     * gained a `brandBrains` row four times a day whether or not one
+     * product had changed.
+     *
+     * Compared against `brandInputFingerprint(...)` (see
+     * lib/brand-stats.ts) at build time; an unchanged fingerprint means
+     * the build returns before it calls a model or writes a version.
+     */
+    brandInputHash: v.optional(v.string()),
+
     // Brand tokens the widget renders with. The prototype implemented
     // per-merchant theming in the renderer but had nowhere to store it
     // and no way to deliver it, so every store got the same hardcoded
@@ -689,6 +744,26 @@ export default defineSchema({
 
     derivedFrom: v.any(), // the statistics this was computed from
     source: v.union(v.literal("derived"), v.literal("merchant_corrected")),
+
+    /**
+     * Which fields a merchant set by hand (P2.2).
+     *
+     * `applyMerchantCorrection` recorded `source: "merchant_corrected"`
+     * and its comment claimed "a later automatic rebuild knows not to
+     * silently undo what a human said" — but `buildBrandBrain` never read
+     * `source`, so the next automatic rebuild demoted the corrected
+     * version and inserted a derived one. Measured: a correction survived
+     * about six hours.
+     *
+     * Knowing WHICH fields were corrected is what lets a rebuild do the
+     * right thing rather than the blunt thing. Derived inference keeps
+     * updating everything the merchant did not touch; the fields listed
+     * here are carried forward verbatim. Stopping rebuilds altogether
+     * would freeze a brand's knowledge at the moment it was first
+     * corrected, which is a different way of being wrong.
+     */
+    correctedFields: v.optional(v.array(v.string())),
+
     confidence: v.number(),
     createdAt: v.number(),
   })

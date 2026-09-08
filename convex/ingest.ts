@@ -153,7 +153,13 @@ async function syncCatalogWork(
     // the full enrichment job must not run synchronously during
     // installation — the merchant should see "catalog ready" in
     // seconds, with product intelligence filling in behind it.
-    await ctx.scheduler.runAfter(0, internal.crons.drainEnrichment, { tenantId });
+    //
+    // Enqueued rather than scheduled directly (P2.2). This used to be a
+    // raw `runAfter` into a self-rescheduling drain: no job row, so an
+    // action that died mid-catalog left no record and nothing retried it,
+    // and two syncs finishing close together started two concurrent
+    // drains over the same products.
+    await ctx.runMutation(internal.scheduling.enqueueEnrichment, { tenantId });
   } catch (err) {
     await ctx.runMutation(internal.tenants.setCatalogStatus, {
       tenantId,
@@ -289,5 +295,14 @@ async function syncSingleProductWork(
       usageSink(ctx, tenantId, "embedding"),
     );
     await embedProducts(ctx, tenantId, changed, provider);
+
+    // An edited product's PROFILE is now stale too — its cache key folds
+    // in the text that just changed — and re-embedding alone would leave
+    // Disc searching on new text while reasoning from old attributes.
+    // Before P2.2 nothing here scheduled enrichment at all, so a merchant
+    // could edit a product and Disc's understanding of it never caught
+    // up. Deduplicated by the sweep position like every other trigger, so
+    // a burst of webhook edits does not start a burst of sweeps.
+    await ctx.runMutation(internal.scheduling.enqueueEnrichment, { tenantId });
   }
 }

@@ -2,6 +2,7 @@ import { usageSink } from "./usage";
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { runAsJob } from "./jobrunner";
 import { bumpCounts } from "./catalog";
 import { profileDelta } from "./lib/catalog-counts";
 import { Doc, Id } from "./_generated/dataModel";
@@ -128,22 +129,66 @@ export const saveProfile = internalMutation({
 });
 
 /**
- * Products in this tenant that have no current profile.
+ * How many products one scan reads, and how many of them one run enriches.
  *
- * Compares the stored cache key against what the product's current
- * content would produce, so a product whose description changed is
- * picked up while an untouched one is skipped.
+ * SCAN_PAGE is a read bound: one page of products plus one profile lookup
+ * each. ENRICH_BATCH is a work bound: each product costs one or two model
+ * calls, so this is what keeps a run inside its time budget.
+ *
+ * They differ because scanning is cheap and enriching is not. A page
+ * bigger than the batch means a fully-enriched catalog sweeps in
+ * `products / SCAN_PAGE` runs instead of `products / ENRICH_BATCH` — on
+ * 5,000 products that is 25 runs rather than 200, for the same result.
  */
-export const staleProductIds = internalQuery({
-  args: { tenantId: v.id("tenants"), limit: v.number(), model: v.string() },
-  handler: async (ctx, { tenantId, limit, model }) => {
-    const products = await ctx.db
+const SCAN_PAGE = 200;
+const ENRICH_BATCH = 25;
+
+/**
+ * One page of a tenant's catalog, and which of it needs enriching.
+ *
+ * REPLACES A CURSORLESS SCAN. The previous implementation did
+ * `take(limit * 4)` from the front of the product index on every call,
+ * with no cursor and no memory. Once the first products were enriched it
+ * returned nothing, and `enrichBatch` inferred "no work remains" from a
+ * second front-of-index probe — so enrichment stopped after one batch and
+ * a product edited further into the catalog was never rediscovered.
+ * Measured on a 500-product catalog: 25 enriched, then the drain declared
+ * itself finished.
+ *
+ * The cursor is Convex's own pagination cursor, the same mechanism
+ * `catalog.countPage` uses, so a sweep is resumable across invocations,
+ * retries and crashes without inventing a second pagination scheme.
+ *
+ * Staleness itself is unchanged: the stored cache key is compared against
+ * what the product's current content, schema, prompt and model would
+ * produce, so an edited product is stale and an untouched one is not.
+ */
+export const scanForEnrichment = internalQuery({
+  args: {
+    tenantId: v.id("tenants"),
+    cursor: v.union(v.string(), v.null()),
+    model: v.string(),
+    pageSize: v.optional(v.number()),
+    batchSize: v.optional(v.number()),
+  },
+  returns: v.object({
+    staleIds: v.array(v.id("products")),
+    /** Stale in THIS page that the batch bound left behind. Counted, not guessed. */
+    remainingInPage: v.number(),
+    scanned: v.number(),
+    cursor: v.union(v.string(), v.null()),
+    /** True when this page was the last one in the catalog. */
+    pageIsLast: v.boolean(),
+  }),
+  handler: async (ctx, args) => {
+    const batchSize = args.batchSize ?? ENRICH_BATCH;
+    const page = await ctx.db
       .query("products")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
-      .take(limit * 4);
+      .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
+      .paginate({ cursor: args.cursor, numItems: args.pageSize ?? SCAN_PAGE });
 
     const stale: Id<"products">[] = [];
-    for (const product of products) {
+    for (const product of page.page) {
       const expected = enrichmentCacheKey({
         title: product.title,
         description: product.description,
@@ -151,68 +196,254 @@ export const staleProductIds = internalQuery({
         images: product.images,
         schemaVersion: PROFILE_SCHEMA_VERSION,
         promptVersion: PROMPT_VERSIONS.productProfile,
-        model,
+        model: args.model,
       });
       const profile = await ctx.db
         .query("productProfiles")
         .withIndex("by_tenant_and_product", (q) =>
-          q.eq("tenantId", tenantId).eq("productId", product._id),
+          q.eq("tenantId", args.tenantId).eq("productId", product._id),
         )
         .unique();
 
       if (!profile || profile.cacheKey !== expected) stale.push(product._id);
-      if (stale.length >= limit) break;
     }
-    return stale;
+
+    // The whole page is examined before the batch bound is applied, so
+    // `remainingInPage` is a count of what was actually seen rather than
+    // an inference from a second probe. That number is what tells the
+    // caller whether to stay on this page or move to the next, and it is
+    // the reason a page is never advanced past unexamined products.
+    return {
+      staleIds: stale.slice(0, batchSize),
+      remainingInPage: Math.max(0, stale.length - batchSize),
+      scanned: page.page.length,
+      cursor: page.continueCursor,
+      pageIsLast: page.isDone,
+    };
+  },
+});
+
+/** Where this tenant's sweep has got to. */
+export const sweepState = internalQuery({
+  args: { tenantId: v.id("tenants") },
+  returns: v.union(
+    v.null(),
+    v.object({
+      cursor: v.union(v.string(), v.null()),
+      sweepEnriched: v.number(),
+      sweep: v.number(),
+    }),
+  ),
+  handler: async (ctx, { tenantId }) => {
+    const tenant = await ctx.db.get(tenantId);
+    if (!tenant) return null;
+    return {
+      cursor: tenant.enrichmentCursor ?? null,
+      sweepEnriched: tenant.enrichmentSweepEnriched ?? 0,
+      sweep: tenant.enrichmentSweep ?? 0,
+    };
   },
 });
 
 /**
- * Enrich a batch of products.
+ * Record what a window did, and schedule whatever comes next.
  *
- * Sequential per product but bounded per run, so a large catalog is
- * enriched over several scheduled passes rather than one action that
- * times out and loses everything it did.
+ * One mutation, because the cursor advance and the next window's enqueue
+ * must commit together. Convex schedules transactionally, so a sweep can
+ * never be left with an advanced cursor and nothing coming — which is
+ * indistinguishable from a sweep that finished, and would strand the rest
+ * of the catalog until the next safety-net run.
  */
-export const enrichBatch = internalAction({
-  args: { tenantId: v.id("tenants"), limit: v.optional(v.number()) },
-  returns: v.object({ enriched: v.number(), remaining: v.number() }),
-  handler: async (ctx, { tenantId, limit }) => {
-    const apiKey = env("ANTHROPIC_API_KEY");
-    const text = reasoningProvider(apiKey, "fast", usageSink(ctx, tenantId, "enrichment"));
-    const vision = visionProvider(apiKey, usageSink(ctx, tenantId, "vision"));
-    const batchSize = limit ?? 25;
+export const completeEnrichmentWindow = internalMutation({
+  args: {
+    tenantId: v.id("tenants"),
+    enriched: v.number(),
+    remainingInPage: v.number(),
+    nextCursor: v.union(v.string(), v.null()),
+    pageIsLast: v.boolean(),
+  },
+  returns: v.object({
+    sweepComplete: v.boolean(),
+    heldPage: v.boolean(),
+    sweepEnriched: v.number(),
+  }),
+  handler: async (ctx, args) => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (!tenant) {
+      return { sweepComplete: true, heldPage: false, sweepEnriched: 0 };
+    }
 
-    const stale: Id<"products">[] = await ctx.runQuery(internal.enrichment.staleProductIds, {
-      tenantId,
-      limit: batchSize,
-      model: text.name,
+    const sweepEnriched = (tenant.enrichmentSweepEnriched ?? 0) + args.enriched;
+
+    // STAY ON THIS PAGE ONLY WHILE STILL MAKING PROGRESS THROUGH IT.
+    //
+    // A page can hold more stale products than one run may enrich, and
+    // advancing past them would skip them for the rest of the sweep. But
+    // holding a page unconditionally is how a page of permanently-failing
+    // products becomes an infinite loop, so the hold is conditional on
+    // this run having enriched something. A product that keeps failing is
+    // left stale and picked up by the next sweep — forward progress
+    // beats retrying the same failure forever, and the job's own retry
+    // policy is the mechanism for genuine transient failure.
+    const heldPage = args.remainingInPage > 0 && args.enriched > 0;
+    const sweepComplete = !heldPage && args.pageIsLast;
+
+    await ctx.db.patch(args.tenantId, {
+      // A completed sweep resets to the beginning. Patching to
+      // `undefined` removes the field, and an absent cursor is what
+      // `scanForEnrichment` reads as "start at the first product".
+      enrichmentCursor: sweepComplete
+        ? undefined
+        : heldPage
+          ? tenant.enrichmentCursor
+          : (args.nextCursor ?? undefined),
+      enrichmentSweepEnriched: sweepComplete ? 0 : sweepEnriched,
+      // Advanced on completion so the next sweep's keys cannot collide
+      // with this one's. See `enrichmentKey`.
+      ...(sweepComplete
+        ? { enrichmentSweep: (tenant.enrichmentSweep ?? 0) + 1 }
+        : {}),
+      updatedAt: Date.now(),
     });
-    if (stale.length === 0) return { enriched: 0, remaining: 0 };
 
+    if (!sweepComplete) {
+      // The chain. The key derives from the cursor and the sweep's
+      // enriched count, both of which this mutation has just advanced, so
+      // the next window is a different piece of logical work while two
+      // concurrent triggers for the SAME position still collapse to one.
+      await ctx.runMutation(internal.scheduling.enqueueEnrichment, {
+        tenantId: args.tenantId,
+        delayMs: ENRICHMENT_WINDOW_DELAY_MS,
+      });
+      return { sweepComplete, heldPage, sweepEnriched };
+    }
+
+    // Sweep finished. A Brand Brain build is worth scheduling only if
+    // this sweep actually changed what the brain is derived from, or if
+    // there is no brain yet. The build itself re-checks with a
+    // fingerprint, so this gate is an optimisation rather than the
+    // correctness boundary — it exists so an unchanged catalog does not
+    // create a job row every six hours to discover it has nothing to do.
+    const current = await ctx.db
+      .query("brandBrains")
+      .withIndex("by_tenant_current", (q) =>
+        q.eq("tenantId", args.tenantId).eq("isCurrent", true),
+      )
+      .unique();
+
+    if (sweepEnriched > 0 || !current) {
+      await ctx.runMutation(internal.scheduling.enqueueBrandBuild, {
+        tenantId: args.tenantId,
+      });
+    }
+    return { sweepComplete, heldPage, sweepEnriched };
+  },
+});
+
+/** Pace between windows. Long enough not to hammer the model provider. */
+const ENRICHMENT_WINDOW_DELAY_MS = 1000;
+
+/**
+ * One enrichment window, as a durable job.
+ *
+ * Before P2.2 this was a raw `ctx.scheduler.runAfter` chain with no job
+ * row: an action that died mid-catalog left no record, nothing retried
+ * it, and two triggers for the same tenant ran two concurrent drains.
+ * Now it is a `product_enrichment` job like any other — claimed before it
+ * runs, classified when it fails, recovered by the stale-job sweeper, and
+ * deduplicated by an idempotency key.
+ *
+ * Bounded work per execution, resumable across executions. The window is
+ * the unit precisely because a 5,000-product catalog cannot be enriched
+ * inside one action's time limit, and pretending otherwise is what the
+ * previous design did.
+ */
+export const runEnrichmentWindow = internalAction({
+  args: { tenantId: v.id("tenants"), jobId: v.optional(v.id("jobs")) },
+  /**
+   * Reports what the window did.
+   *
+   * `ran: false` covers a refused claim — another execution holds this
+   * job — which is a normal outcome rather than a failure. The sweep
+   * state is returned rather than left to be inferred from the cursor,
+   * because a null cursor means both "not started" and "just finished"
+   * and callers must not have to guess which.
+   */
+  returns: v.object({
+    ran: v.boolean(),
+    enriched: v.number(),
+    sweepComplete: v.boolean(),
+  }),
+  handler: async (ctx, { tenantId, jobId }) => {
+    const outcome = await runAsJob(ctx, { tenantId, jobId }, () =>
+      enrichmentWindowWork(ctx, tenantId),
+    );
+    if (!outcome.ran) return { ran: false, enriched: 0, sweepComplete: false };
+    return { ran: true, ...outcome.result };
+  },
+});
+
+/**
+ * Split from the action so the executor wraps it — the same reason
+ * `syncCatalogWork` is split from `syncCatalog`. A handler that catches
+ * its own errors can never be retried, because nothing outside it learns
+ * one happened.
+ */
+async function enrichmentWindowWork(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+  tenantId: Id<"tenants">,
+): Promise<{ enriched: number; sweepComplete: boolean }> {
+  const apiKey = env("ANTHROPIC_API_KEY");
+  const text = reasoningProvider(apiKey, "fast", usageSink(ctx, tenantId, "enrichment"));
+  const vision = visionProvider(apiKey, usageSink(ctx, tenantId, "vision"));
+
+  const state: { cursor: string | null; sweepEnriched: number; sweep: number } | null =
+    await ctx.runQuery(internal.enrichment.sweepState, { tenantId });
+  // A tenant that no longer exists is not a failure to retry.
+  if (!state) return { enriched: 0, sweepComplete: true };
+
+  const scan: {
+    staleIds: Id<"products">[];
+    remainingInPage: number;
+    scanned: number;
+    cursor: string | null;
+    pageIsLast: boolean;
+  } = await ctx.runQuery(internal.enrichment.scanForEnrichment, {
+    tenantId,
+    cursor: state.cursor,
+    model: text.name,
+  });
+
+  let enriched = 0;
+  if (scan.staleIds.length > 0) {
     const products: Doc<"products">[] = await ctx.runQuery(
       internal.products.listForEmbedding,
-      { productIds: stale },
+      { productIds: scan.staleIds },
     );
-
-    let enriched = 0;
     for (const product of products) {
       try {
         await enrichOne(ctx, tenantId, product, text, vision);
         enriched++;
       } catch {
-        // One product failing must not abandon the batch. It keeps its
-        // stale cache key, so the next pass retries it.
+        // One product failing must not abandon the window. It keeps its
+        // stale cache key, so the next sweep retries it.
       }
     }
+  }
 
-    const remainingIds: Id<"products">[] = await ctx.runQuery(
-      internal.enrichment.staleProductIds,
-      { tenantId, limit: 1, model: text.name },
-    );
-    return { enriched, remaining: remainingIds.length };
-  },
-});
+  const outcome: { sweepComplete: boolean } = await ctx.runMutation(
+    internal.enrichment.completeEnrichmentWindow,
+    {
+      tenantId,
+      enriched,
+      remainingInPage: scan.remainingInPage,
+      nextCursor: scan.cursor,
+      pageIsLast: scan.pageIsLast,
+    },
+  );
+  return { enriched, sweepComplete: outcome.sweepComplete };
+}
 
 async function enrichOne(
   ctx: any,

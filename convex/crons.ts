@@ -65,6 +65,22 @@ crons.daily(
   {},
 );
 
+/**
+ * Catch what the enrichment chain cannot recover from on its own (P2.2).
+ *
+ * Hourly rather than six-hourly because what it recovers is a stalled
+ * sweep, and a merchant whose product intelligence has stopped should not
+ * wait a quarter of a day for it to resume. It is cheap: tenants with
+ * nothing to do are filtered in the query, and a Brand Brain build with
+ * unchanged inputs returns before it calls a model.
+ */
+crons.interval(
+  "reconcile catalog intelligence",
+  { hours: 1 },
+  internal.crons.reconcileIntelligence,
+  {},
+);
+
 // Cheap sweeps; these tables would otherwise grow forever.
 crons.daily(
   "purge expired sessions",
@@ -108,34 +124,68 @@ export const resyncStaleCatalogs = internalAction({
 });
 
 /**
- * Drain the enrichment backlog.
+ * Reconciliation for the enrichment sweep and the Brand Brain (P2.2).
  *
- * `enrichBatch` is bounded per run so it cannot time out, which means a
- * large catalog needs several passes. This re-schedules itself while
- * work remains rather than relying on the hourly tick, so a 5,000-product
- * catalog finishes in minutes instead of days.
+ * REPLACES `drainEnrichment`, which was a raw self-rescheduling action
+ * chain that ended in an unconditional `buildBrandBrain`. Two things were
+ * wrong with it and both are gone: the chain had no job row, so a run
+ * that died left no record and nothing retried it; and it rebuilt the
+ * brain on every sweep whether or not the catalog had changed.
+ *
+ * The sweep now chains itself through `enqueueEnrichment`, and the brain
+ * is built when knowledge changes. This exists only for the cases that
+ * chain cannot recover from by itself:
+ *
+ *   - a window that exhausted its retries, leaving a `failed` job the
+ *     chain deduplicates into and never advances past. `explicit: true`
+ *     is what breaks that deadlock, exactly as it does for a merchant
+ *     pressing Resync.
+ *   - a catalog whose products were DELETED rather than enriched. That
+ *     changes what the brain derives from without enriching anything, so
+ *     no sweep marks it dirty.
+ *
+ * It cannot cause a pointless rebuild: the build re-checks its input
+ * fingerprint and returns before any model call when nothing changed.
  */
-export const drainEnrichment = internalAction({
-  args: { tenantId: v.id("tenants") },
+export const reconcileIntelligence = internalAction({
+  args: { limit: v.optional(v.number()) },
   returns: v.null(),
-  handler: async (ctx, { tenantId }) => {
-    const result: { enriched: number; remaining: number } = await ctx.runAction(
-      internal.enrichment.enrichBatch,
-      { tenantId },
-    );
-    // Only continue while progress is actually being made. A batch that
-    // enriched nothing but still reports work remaining means every
-    // product in it failed, and re-scheduling would spin forever.
-    if (result.remaining > 0 && result.enriched > 0) {
-      await ctx.scheduler.runAfter(1000, internal.crons.drainEnrichment, { tenantId });
-      return null;
-    }
+  handler: async (ctx, args) => {
+    const tenants: Array<{
+      _id: Id<"tenants">;
+      needsEnrichment: boolean;
+      needsBrandBuild: boolean;
+    }> = await ctx.runQuery(internal.tenants.needingIntelligenceWork, {
+      limit: args.limit ?? 25,
+    });
 
-    // Backlog drained. The Brand Brain is derived from product
-    // attributes, so it can only be built once enough of them exist —
-    // `canDeriveBrand` refuses below the coverage threshold, and this is
-    // the point at which coverage stops changing.
-    await ctx.scheduler.runAfter(0, internal.brand.buildBrandBrain, { tenantId });
+    for (const tenant of tenants) {
+      // One tenant failing must not stop the sweep — the same reasoning
+      // as the resync fanout.
+      try {
+        if (tenant.needsEnrichment) {
+          await ctx.runMutation(internal.scheduling.enqueueEnrichment, {
+            tenantId: tenant._id,
+            explicit: true,
+          });
+        }
+        if (tenant.needsBrandBuild) {
+          await ctx.runMutation(internal.scheduling.enqueueBrandBuild, {
+            tenantId: tenant._id,
+            explicit: true,
+          });
+        }
+      } catch (err) {
+        console.log(
+          JSON.stringify({
+            scope: "intelligence",
+            event: "reconcile_failed",
+            tenantId: tenant._id,
+            error: (err as Error).message.slice(0, 200),
+          }),
+        );
+      }
+    }
     return null;
   },
 });

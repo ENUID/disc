@@ -127,6 +127,72 @@ export function productSyncKey(
 }
 
 /**
+ * One enrichment window (P2.2).
+ *
+ * What makes two invocations the same window: the same tenant, at the
+ * same position in the sweep, having enriched the same amount so far.
+ *
+ * All three discriminators are needed, and each covers a gap the others
+ * leave.
+ *
+ *   sweep     separates one pass over the catalog from the next. A
+ *             completed sweep resets the cursor and the count, so
+ *             without this the first window of every sweep would derive
+ *             the same key, deduplicate into the first sweep's finished
+ *             job, and schedule nothing — a catalog would enrich once
+ *             after install and never again.
+ *   cursor    advances as a window moves to the next page.
+ *   enriched  covers the case the cursor cannot: a page holding more
+ *             stale products than one window may enrich is deliberately
+ *             NOT advanced past, so the cursor repeats and the chain
+ *             would otherwise deduplicate into its own predecessor and
+ *             stop. Holding a page requires having enriched something,
+ *             so this advances exactly when the cursor does not.
+ *
+ * Together they are monotonic across a sweep, and distinct between
+ * sweeps.
+ *
+ * `null` is spelled out rather than left to `String(null)` so that the
+ * start of a sweep is a deliberate token rather than a coincidence of
+ * coercion.
+ */
+export function enrichmentKey(
+  tenantId: Id<"tenants">,
+  sweep: number,
+  cursor: string | null,
+  enriched: number,
+): string {
+  return idempotencyKey("product_enrichment", [
+    tenantId,
+    sweep,
+    cursor ?? "start",
+    enriched,
+  ]);
+}
+
+/**
+ * One Brand Brain build.
+ *
+ * Keyed on the enrichment sweep that produced the knowledge, NOT on a
+ * time bucket. A time bucket was the obvious choice — it is what
+ * `catalogSyncKey` uses — and it is wrong here for a reason worth
+ * recording: two genuine knowledge changes inside the window would
+ * collapse into one job, the second would deduplicate into the first
+ * (already finished) build, and nothing would reschedule it. The brain
+ * would then sit stale until something unrelated happened to trigger it.
+ * A catalog is enriched in windows, so changes arrive continuously and
+ * that window would be hit constantly.
+ *
+ * The sweep generation is the honest discriminator: it advances exactly
+ * once per pass over the catalog, so every sweep that changed something
+ * gets its own build, and the several triggers a single sweep can
+ * produce still collapse into one.
+ */
+export function brandBuildKey(tenantId: Id<"tenants">, sweep: number): string {
+  return idempotencyKey("brand_brain_build", [tenantId, sweep]);
+}
+
+/**
  * Create-or-get, then schedule if and only if this call created it.
  *
  * Returns `created: false` for work that already exists in ANY state:
@@ -257,12 +323,24 @@ async function scheduleWorker(
       });
       return;
 
+    case "product_enrichment":
+      await scheduler.runAfter(delayMs, internal.enrichment.runEnrichmentWindow, {
+        tenantId: args.tenantId,
+        jobId: args.jobId,
+      });
+      return;
+
+    case "brand_brain_build":
+      await scheduler.runAfter(delayMs, internal.brand.buildBrandBrain, {
+        tenantId: args.tenantId,
+        jobId: args.jobId,
+      });
+      return;
+
     // Not scheduled through this seam yet. Listed so that adding one is
     // a deliberate edit here rather than a silent no-op: a job row with
     // no scheduled execution is exactly the orphan this module exists to
     // prevent.
-    case "product_enrichment":
-    case "brand_brain_build":
     case "look_vision_analysis":
     case "look_graph_rebuild":
     case "analytics_rollup":
@@ -332,6 +410,106 @@ export const enqueueCatalogSync = internalMutation({
       status: "queued",
       recovered: true,
     };
+  },
+});
+
+/**
+ * Enqueue the next enrichment window for a tenant (P2.2).
+ *
+ * Callers: the catalog sync when it finishes, each window as it chains to
+ * the next, and the reconciliation cron as a safety net. All three route
+ * here for the same reason every catalog-sync caller routes through
+ * `enqueueCatalogSync` — so that "an enrichment window is in flight" has
+ * exactly one answer.
+ *
+ * The key is read from the tenant's live sweep position rather than
+ * passed in, so a caller cannot accidentally enqueue a window for a
+ * position the sweep has already moved past.
+ */
+export const enqueueEnrichment = internalMutation({
+  args: {
+    tenantId: v.id("tenants"),
+    delayMs: v.optional(v.number()),
+    /**
+     * A safety-net or human-initiated trigger, rather than the chain
+     * continuing itself.
+     *
+     * Same meaning as `enqueueCatalogSync`'s flag and for the same
+     * reason: an ordinary duplicate must deduplicate against a failed
+     * job, but a sweep whose chain died on a failed window would then be
+     * stuck forever — the reconciliation cron would enqueue, dedupe into
+     * the dead job, schedule nothing, and report success. Only the failed
+     * case behaves differently; a live window still wins.
+     */
+    explicit: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<EnqueueResult> => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (!tenant) throw new Error("Unknown tenant");
+
+    const key = enrichmentKey(
+      args.tenantId,
+      tenant.enrichmentSweep ?? 0,
+      tenant.enrichmentCursor ?? null,
+      tenant.enrichmentSweepEnriched ?? 0,
+    );
+
+    const enqueued: EnqueueResult = await ctx.runMutation(internal.scheduling.enqueue, {
+      tenantId: args.tenantId,
+      type: "product_enrichment",
+      idempotencyKey: key,
+      delayMs: args.delayMs,
+    });
+
+    if (!args.explicit || enqueued.created || enqueued.status !== "failed") {
+      return enqueued;
+    }
+
+    const retried = await ctx.runMutation(internal.scheduling.retryFailedJob, {
+      tenantId: args.tenantId,
+      jobId: enqueued.jobId,
+    });
+    if (!retried.retried) return enqueued;
+    return { jobId: retried.jobId, created: retried.created, status: "queued" };
+  },
+});
+
+/**
+ * Enqueue a Brand Brain build (P2.2).
+ *
+ * Scheduling a build is not the same as performing one. The build reads
+ * its input fingerprint first and returns without a model call or a new
+ * version when nothing it derives from has changed — so this is safe to
+ * call whenever knowledge might have moved, and callers do not have to
+ * reason about whether it actually did.
+ */
+export const enqueueBrandBuild = internalMutation({
+  args: {
+    tenantId: v.id("tenants"),
+    delayMs: v.optional(v.number()),
+    explicit: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args): Promise<EnqueueResult> => {
+    const tenant = await ctx.db.get(args.tenantId);
+    if (!tenant) throw new Error("Unknown tenant");
+
+    const enqueued: EnqueueResult = await ctx.runMutation(internal.scheduling.enqueue, {
+      tenantId: args.tenantId,
+      type: "brand_brain_build",
+      idempotencyKey: brandBuildKey(args.tenantId, tenant.enrichmentSweep ?? 0),
+      delayMs: args.delayMs,
+    });
+
+    if (!args.explicit || enqueued.created || enqueued.status !== "failed") {
+      return enqueued;
+    }
+
+    const retried = await ctx.runMutation(internal.scheduling.retryFailedJob, {
+      tenantId: args.tenantId,
+      jobId: enqueued.jobId,
+    });
+    if (!retried.retried) return enqueued;
+    return { jobId: retried.jobId, created: retried.created, status: "queued" };
   },
 });
 

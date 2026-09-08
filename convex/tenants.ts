@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { randomToken } from "./lib/crypto";
 import { billingEnabled } from "./lib/env";
 import { storefrontStatus, tenantByPublicKey, tenantByShopDomain } from "./lib/tenancy";
@@ -164,6 +165,71 @@ export const dueForResync = internalQuery({
     return candidates
       .filter((t) => t.lastSyncedAt === undefined || t.lastSyncedAt < olderThan)
       .slice(0, limit);
+  },
+});
+
+/**
+ * Tenants whose catalog intelligence may need a nudge (P2.2).
+ *
+ * Deliberately cheap and deliberately imprecise. It answers "might there
+ * be work here", not "is there work here" — establishing the latter means
+ * scanning the catalog, which is exactly the request-path scan this
+ * codebase keeps out of hot paths. Both downstream enqueues re-check
+ * properly: an enrichment window scans a bounded page and finds nothing,
+ * and a Brand Brain build compares its input fingerprint before spending
+ * anything.
+ *
+ * The two conditions, and what each recovers:
+ *
+ *   needsEnrichment   more products than profiles. Read from the P1.6
+ *                     counters, so it is O(1) per tenant and needs no
+ *                     catalog scan at all.
+ *   needsBrandBuild   the catalog is ready but no brain is current, which
+ *                     covers a first build that never happened and a
+ *                     catalog whose products were deleted rather than
+ *                     enriched.
+ *
+ * `enrichmentCursor` is deliberately NOT the enrichment signal, even
+ * though it looks like the obvious one. An absent cursor means both "no
+ * sweep is running" and "a sweep is holding the first page", because a
+ * page with more stale products than one window may enrich is not
+ * advanced past — so a chain that died on the first page would be
+ * invisible to a check that trusted it. The counters do not have that
+ * ambiguity.
+ */
+export const needingIntelligenceWork = internalQuery({
+  args: { limit: v.number() },
+  handler: async (ctx, { limit }) => {
+    const candidates = await ctx.db
+      .query("tenants")
+      .filter((q) => q.eq(q.field("catalogStatus"), "ready"))
+      .take(limit * 4);
+
+    const out: Array<{
+      _id: Id<"tenants">;
+      needsEnrichment: boolean;
+      needsBrandBuild: boolean;
+    }> = [];
+
+    for (const tenant of candidates) {
+      if (out.length >= limit) break;
+
+      const needsEnrichment =
+        (tenant.productCount ?? 0) > (tenant.enrichedCount ?? 0);
+
+      const current = await ctx.db
+        .query("brandBrains")
+        .withIndex("by_tenant_current", (q) =>
+          q.eq("tenantId", tenant._id).eq("isCurrent", true),
+        )
+        .unique();
+      const needsBrandBuild = current === null && tenant.brandBrainStatus !== "building";
+
+      if (needsEnrichment || needsBrandBuild) {
+        out.push({ _id: tenant._id, needsEnrichment, needsBrandBuild });
+      }
+    }
+    return out;
   },
 });
 

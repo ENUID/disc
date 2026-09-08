@@ -90,6 +90,13 @@ export default async function CatalogPage() {
           Indexed products can be found. Understood products can also be styled,
           matched and built into outfits — Disc knows their fit, formality,
           material and colour.
+          {catalog.notEnriched > 0 && (
+            <>
+              {" "}
+              Disc works through the catalog in batches, so this fills in over
+              minutes to hours on a large store rather than all at once.
+            </>
+          )}
         </p>
       </Card>
 
@@ -100,7 +107,7 @@ export default async function CatalogPage() {
           value={catalog.notEnriched}
           hint={
             catalog.notEnriched > 0
-              ? "Searchable, but score neutral in outfits"
+              ? "Disc is still working through these"
               : "Everything is enriched"
           }
         />
