@@ -12,7 +12,7 @@ import {
   WidgetPill,
   relativeTime,
 } from "@/components/ui";
-import { PreviewButton } from "@/components/actions";
+import { PreviewButton, PaySetupFeeButton } from "@/components/actions";
 
 /**
  * Overview (spec §71).
@@ -57,8 +57,13 @@ function subscriptionReason(status: string): string {
   }
 }
 
-export default async function OverviewPage() {
-  const [bundle, analytics] = await Promise.all([
+export default async function OverviewPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ setup_fee?: string }>;
+}) {
+  const [{ setup_fee: setupFeeReturn }, bundle, analytics] = await Promise.all([
+    searchParams,
     apiGet<DashboardBundle>("/merchant/dashboard"),
     apiGet<Analytics>("/merchant/analytics?days=30"),
   ]);
@@ -90,7 +95,37 @@ export default async function OverviewPage() {
         </div>
       )}
 
-      {!status.active && (
+      {/* Setup fee takes priority over the subscription banner below —
+          for an invited merchant it is the actual blocking step, and a
+          subscription is not yet the relevant concern. Checkout starting
+          or being cancelled is not payment: only a verified Dodo webhook
+          marks the fee paid, so this never claims success either way. */}
+      {status.setupFee === "unpaid" && setupFeeReturn === "cancelled" && (
+        <div className="note">Checkout cancelled. Nothing was charged.</div>
+      )}
+      {overview.setupFeeRequired ? (
+        <div className="setup-fee">
+          <h3>Disc setup</h3>
+          <div className="price">
+            $400<span>one time</span>
+          </div>
+          <p>
+            Initial setup and access to Disc. This is separate from your
+            monthly plan below, and unlocks once payment is confirmed.
+          </p>
+          <PaySetupFeeButton />
+        </div>
+      ) : (
+        status.setupFee === "paid" &&
+        setupFeeReturn === "success" && (
+          <div className="note ok">
+            Checkout complete. Setup fee activates as soon as Dodo confirms
+            it, usually within a few seconds.
+          </div>
+        )
+      )}
+
+      {!overview.setupFeeRequired && !status.active && (
         <div className="note warn">
           <strong>Disc is not serving shoppers.</strong>{" "}
           {subscriptionReason(status.subscription)}{" "}

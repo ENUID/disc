@@ -3,7 +3,13 @@
 import { useActionState, useTransition } from "react";
 import type { ReactNode } from "react";
 import type { ActionResult } from "@/app/actions";
-import { resyncCatalog, signOut, startPreview, openPortal } from "@/app/actions";
+import {
+  resyncCatalog,
+  signOut,
+  startPreview,
+  openPortal,
+  openSetupFeeCheckout,
+} from "@/app/actions";
 
 /**
  * Buttons and forms that call server actions.
@@ -73,6 +79,14 @@ export function ManageBillingButton() {
   return (
     <ActionButton action={openPortal} pendingLabel="Opening Stripe…">
       Manage subscription
+    </ActionButton>
+  );
+}
+
+export function PaySetupFeeButton() {
+  return (
+    <ActionButton action={openSetupFeeCheckout} pendingLabel="Opening…" className="btn">
+      Continue to payment
     </ActionButton>
   );
 }

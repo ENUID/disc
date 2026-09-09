@@ -27,12 +27,18 @@ export type Overview = {
     widget: WidgetStatus;
     subscription: string;
     active: boolean;
+    /** "invited" only for a tenant that came through an invitation. */
+    invitation: "invited" | "none";
+    /** "not_required" for every tenant with no invitation — grandfathered. */
+    setupFee: "unpaid" | "paid" | "not_required";
   };
   productCount: number;
   lastSyncedAt: number | null;
   catalogError: string | null;
   onboarding: OnboardingStage[];
   needsActivation: boolean;
+  /** True only for an invited tenant whose $400 setup fee is not yet paid. */
+  setupFeeRequired: boolean;
 };
 
 export type CatalogHealth = {

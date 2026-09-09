@@ -1,8 +1,8 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery, query } from "./_generated/server";
+import { internalMutation, internalQuery, query, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { randomToken } from "./lib/crypto";
-import { billingEnabled } from "./lib/env";
+import { billingEnabled, setupFeeEnabled } from "./lib/env";
 import { storefrontStatus, tenantByPublicKey, tenantByShopDomain } from "./lib/tenancy";
 
 /**
@@ -42,7 +42,7 @@ export const storefrontConfig = query({
   handler: async (ctx, { publicKey }) => {
     const tenant = await tenantByPublicKey(ctx, publicKey);
     if (!tenant) return null;
-    return storefrontStatus(tenant, billingEnabled());
+    return storefrontStatus(tenant, billingEnabled(), setupFeeEnabled());
   },
 });
 
@@ -63,9 +63,33 @@ export const storefrontConfigByDomain = query({
   handler: async (ctx, { shopDomain }) => {
     const tenant = await tenantByShopDomain(ctx, shopDomain);
     if (!tenant) return null;
-    return storefrontStatus(tenant, billingEnabled());
+    return storefrontStatus(tenant, billingEnabled(), setupFeeEnabled());
   },
 });
+
+/**
+ * Resolve a redeemable invitation, or null.
+ *
+ * "Redeemable" means pending and unexpired — anything else (unknown
+ * hash, already redeemed, revoked, expired) is treated identically to
+ * "no invitation was presented". That is deliberate: a bad or reused
+ * invitation link must never block or corrupt an install, only fail to
+ * grant the invitation's own effect. The merchant still gets Disc
+ * through the ordinary self-serve path; they just do not get tagged as
+ * invited, so `setupFeeSatisfied` grandfathers them exactly as it would
+ * a tenant that never carried an invitation at all.
+ */
+async function redeemableInvitation(ctx: MutationCtx, tokenHash: string | undefined) {
+  if (!tokenHash) return null;
+  const invitation = await ctx.db
+    .query("invitations")
+    .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
+    .unique();
+  if (!invitation) return null;
+  if (invitation.status !== "pending") return null;
+  if (invitation.expiresAt < Date.now()) return null;
+  return invitation;
+}
 
 export const createOrUpdateFromInstall = internalMutation({
   args: {
@@ -73,40 +97,76 @@ export const createOrUpdateFromInstall = internalMutation({
     shopifyShopId: v.optional(v.string()),
     accessTokenCipher: v.string(),
     scopes: v.string(),
+    // A hash, never the raw token — matches `invitations.tokenHash`.
+    // Optional: most installs carry no invitation at all.
+    invitationTokenHash: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const existing = await tenantByShopDomain(ctx, args.shopDomain);
     const now = Date.now();
 
+    // Resolved and validated before any write, so an invalid token can
+    // never have a side effect. INVITATION != TENANT: nothing here ever
+    // takes a shop domain from the invitation — only Shopify's own OAuth
+    // round-trip proves that, which is what stops an invitation token
+    // from being used to impersonate an arbitrary shop.
+    const invitation = await redeemableInvitation(ctx, args.invitationTokenHash);
+
+    let tenantId: Id<"tenants">;
     if (existing) {
       // Reinstalling must NOT mint a new public key. The old one may
       // already be live in a theme, and rotating it would silently kill
       // Disc on that storefront.
+      //
+      // An invitation is only attached when the tenant does not already
+      // carry one — reinstalling with a stray invite link in the URL
+      // must not let it re-tag or move an established tenant.
+      const grant =
+        invitation && !existing.invitationId
+          ? { invitationId: invitation._id, setupFeeStatus: "unpaid" as const }
+          : {};
       await ctx.db.patch(existing._id, {
         accessTokenCipher: args.accessTokenCipher,
         scopes: args.scopes,
         shopifyShopId: args.shopifyShopId ?? existing.shopifyShopId,
         source: "shopify_oauth",
         updatedAt: now,
+        ...grant,
       });
-      return existing._id;
+      tenantId = existing._id;
+    } else {
+      tenantId = await ctx.db.insert("tenants", {
+        shopDomain: args.shopDomain,
+        shopifyShopId: args.shopifyShopId,
+        publicKey: randomToken("disc_"),
+        accessTokenCipher: args.accessTokenCipher,
+        scopes: args.scopes,
+        source: "shopify_oauth",
+        catalogStatus: "pending",
+        brandBrainStatus: "pending",
+        widgetStatus: "inactive",
+        subscriptionStatus: "none",
+        productCount: 0,
+        createdAt: now,
+        updatedAt: now,
+        ...(invitation
+          ? { invitationId: invitation._id, setupFeeStatus: "unpaid" as const }
+          : {}),
+      });
     }
 
-    return await ctx.db.insert("tenants", {
-      shopDomain: args.shopDomain,
-      shopifyShopId: args.shopifyShopId,
-      publicKey: randomToken("disc_"),
-      accessTokenCipher: args.accessTokenCipher,
-      scopes: args.scopes,
-      source: "shopify_oauth",
-      catalogStatus: "pending",
-      brandBrainStatus: "pending",
-      widgetStatus: "inactive",
-      subscriptionStatus: "none",
-      productCount: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
+    // Single-use, atomically with the tenant write: redeeming twice
+    // concurrently cannot attach two tenants, because the second
+    // transaction's read of `status` would see "redeemed" already.
+    if (invitation && (!existing || !existing.invitationId)) {
+      await ctx.db.patch(invitation._id, {
+        status: "redeemed",
+        tenantId,
+        redeemedAt: now,
+      });
+    }
+
+    return tenantId;
   },
 });
 
@@ -376,6 +436,32 @@ export const purgeTenant = internalMutation({
     for (;;) {
       const batch = await ctx.db
         .query("webhookDeliveries")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
+    // The Dodo event ledger. Same reasoning as the Stripe one below: rows
+    // that never resolved to a tenant are aged out by retention, these
+    // resolved to this one.
+    for (;;) {
+      const batch = await ctx.db
+        .query("dodoEvents")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
+    // The invitation that was redeemed into this tenant. Deleting it
+    // rather than leaving it "redeemed" pointing at nothing: `shop/redact`
+    // promises a redacted shop leaves nothing behind, and a stale
+    // redeemed invitation is exactly the kind of orphan that promise
+    // rules out.
+    for (;;) {
+      const batch = await ctx.db
+        .query("invitations")
         .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
         .take(500);
       if (batch.length === 0) break;

@@ -55,6 +55,42 @@ export const ENCRYPTION_KEY = () => env("DISC_ENCRYPTION_KEY");
 export const STRIPE_WEBHOOK_SECRET = () => env("STRIPE_WEBHOOK_SECRET");
 
 /**
+ * Dodo Payments — the $400 Disc Initial Setup fee. A separate provider
+ * from Stripe on purpose (spec: the two payment concerns must never
+ * collapse into one), so this mirrors STRIPE_SECRET_KEY /
+ * STRIPE_WEBHOOK_SECRET / billingEnabled() exactly, one level down.
+ */
+export const DODO_PAYMENTS_API_KEY = () => env("DODO_PAYMENTS_API_KEY");
+export const DODO_PAYMENTS_WEBHOOK_KEY = () => env("DODO_PAYMENTS_WEBHOOK_KEY");
+/** The pre-created Dodo product id for the one-time $400 setup fee. */
+export const DODO_SETUP_FEE_PRODUCT_ID = () => env("DODO_SETUP_FEE_PRODUCT_ID");
+
+/**
+ * Whether the setup fee is enforced. False without a Dodo key, for the
+ * same reason billingEnabled() is false without a Stripe one: a
+ * deployment that cannot take the $400 must not lock out an invited
+ * merchant it cannot yet charge.
+ */
+export function setupFeeEnabled(): boolean {
+  return Boolean(env("DODO_PAYMENTS_API_KEY"));
+}
+
+/** Invitation lifetime. Long enough for a founder to notice the email. */
+export const INVITATION_TTL_MS = Number(
+  env("DISC_INVITATION_TTL_MS") || String(14 * 24 * 60 * 60 * 1000),
+);
+
+/**
+ * How long the Dodo event ledger is kept. Dodo's docs do not state a
+ * manual-resend window the way Stripe's do; this matches
+ * STRIPE_EVENT_RETENTION_DAYS as a conservative default rather than
+ * guessing a shorter one.
+ */
+export const DODO_EVENT_RETENTION_DAYS = Number(
+  env("DISC_DODO_EVENT_RETENTION_DAYS") || "45",
+);
+
+/**
  * Operator key for the internal economics report.
  *
  * Deliberately a separate credential from anything a merchant holds:

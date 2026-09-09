@@ -50,6 +50,28 @@ export async function tenantByShopDomain(
 }
 
 /**
+ * Whether this tenant has cleared the $400 Disc Initial Setup fee.
+ *
+ * True for almost every tenant, by construction: a tenant with no
+ * `invitationId` never went through the invitation funnel and was never
+ * asked to pay this fee, so there is nothing here to satisfy. This is
+ * the grandfather clause — every tenant that existed before this system,
+ * and every tenant that connects the ordinary self-serve way after it,
+ * is unaffected. Only a tenant whose install redeemed an invitation is
+ * gated, and only until a verified Dodo webhook (never a browser return
+ * from checkout) marks it paid.
+ *
+ * Setup fee unconfigured (no Dodo key) also reads as satisfied, for the
+ * same reason billing unconfigured reads as active: a deployment that
+ * cannot collect the fee must not lock out a merchant it invited.
+ */
+export function setupFeeSatisfied(tenant: Tenant, setupFeeEnabled: boolean): boolean {
+  if (!setupFeeEnabled) return true;
+  if (!tenant.invitationId) return true;
+  return tenant.setupFeeStatus === "paid";
+}
+
+/**
  * Whether this tenant's Disc should run at all.
  *
  * One definition, used by both the storefront boot check and every
@@ -59,8 +81,19 @@ export async function tenantByShopDomain(
  *
  * Billing not configured (no Stripe key) means "active": a deployment
  * that cannot take money must not lock out the merchants it already has.
+ *
+ * Composed with the setup fee rather than replaced by it — INVITED,
+ * PAID and ACTIVE are three different questions. A tenant only reaches
+ * "active" once both the (optional) setup fee and the (optional)
+ * subscription are satisfied; either one withholding it is enough to
+ * keep Disc dormant for that tenant.
  */
-export function isActive(tenant: Tenant, billingEnabled: boolean): boolean {
+export function isActive(
+  tenant: Tenant,
+  billingEnabled: boolean,
+  setupFeeEnabled: boolean,
+): boolean {
+  if (!setupFeeSatisfied(tenant, setupFeeEnabled)) return false;
   if (!billingEnabled) return true;
   return tenant.subscriptionStatus === "active" || tenant.subscriptionStatus === "trialing";
 }
@@ -86,10 +119,11 @@ export type StorefrontStatus = {
 export function storefrontStatus(
   tenant: Tenant,
   billingEnabled: boolean,
+  setupFeeEnabled: boolean,
 ): StorefrontStatus {
   return {
     publicKey: tenant.publicKey,
-    active: isActive(tenant, billingEnabled),
+    active: isActive(tenant, billingEnabled, setupFeeEnabled),
     catalogStatus: tenant.catalogStatus,
     widgetStatus: tenant.widgetStatus,
     brandTokens: tenant.brandTokens ?? null,

@@ -159,6 +159,26 @@ export async function openCheckout(
   redirect(destination);
 }
 
+/**
+ * The $400 Disc Initial Setup fee — Dodo, not Stripe, and a separate
+ * checkout from `openCheckout` above on purpose: this is one-time, not
+ * a subscription, and must not be started or confirmed by the same code
+ * path as the recurring plan.
+ */
+export async function openSetupFeeCheckout(): Promise<ActionResult> {
+  let destination: string;
+  try {
+    const result = await apiPost<{ url?: string; error?: string }>(
+      "/merchant/setup-fee/checkout",
+    );
+    if (!result.url) return { ok: false, error: result.error ?? "Could not start checkout" };
+    destination = result.url;
+  } catch (error) {
+    return failed(error);
+  }
+  redirect(destination);
+}
+
 export async function openPortal(): Promise<ActionResult> {
   let destination: string;
   try {

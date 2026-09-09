@@ -4,7 +4,7 @@ import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { getEmbeddingProvider } from "./lib/embeddings";
-import { billingEnabled, env } from "./lib/env";
+import { billingEnabled, env, setupFeeEnabled } from "./lib/env";
 import { isActive } from "./lib/tenancy";
 
 /**
@@ -77,7 +77,7 @@ export const resolveStorefront = internalQuery({
     if (!tenant) return null;
     return {
       tenantId: tenant._id,
-      active: isActive(tenant, billingEnabled()),
+      active: isActive(tenant, billingEnabled(), setupFeeEnabled()),
       catalogStatus: tenant.catalogStatus,
     };
   },

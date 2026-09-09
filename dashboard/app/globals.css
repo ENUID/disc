@@ -781,6 +781,61 @@ code,
   flex: 1;
 }
 
+/* --------------------------------------- setup fee (Disc Initial Setup)
+ *
+ * Deliberately not a `.plan` card: this is a single, one-time charge, not
+ * a choice among tiers, so it does not use the plan grid's comparison
+ * layout. Inverted colour (the same pair `.btn` uses) reads as a quiet,
+ * separate register from the surface-coloured cards around it — closer
+ * to a pull-quote than a pricing table.
+ */
+
+.setup-fee {
+  background: var(--accent);
+  color: var(--accent-ink);
+  border-radius: var(--radius);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.setup-fee h3 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.setup-fee .price {
+  font-size: 32px;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.setup-fee .price span {
+  font-size: 13px;
+  opacity: 0.7;
+  letter-spacing: 0;
+  margin-left: 4px;
+}
+
+.setup-fee p {
+  margin: 0;
+  font-size: 13.5px;
+  opacity: 0.75;
+  max-width: 46ch;
+}
+
+.setup-fee .btn {
+  align-self: flex-start;
+  background: var(--accent-ink);
+  color: var(--accent);
+  border-color: var(--accent-ink);
+  margin-top: 4px;
+}
+
 /* --------------------------------------------------------------- 900- */
 
 @media (max-width: 900px) {

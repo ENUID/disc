@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
-import { billingEnabled } from "./lib/env";
+import { billingEnabled, setupFeeEnabled } from "./lib/env";
 import { isActive } from "./lib/tenancy";
 import { defaultWidgetConfig, parseWidgetConfig } from "./lib/widget-config";
 import { countsFrom } from "./lib/catalog-counts";
@@ -30,7 +30,7 @@ import { countsFrom } from "./lib/catalog-counts";
  */
 function onboardingStages(tenant: Doc<"tenants">, hasProfiles: boolean) {
   const catalogReady = tenant.catalogStatus === "ready";
-  return [
+  const stages = [
     {
       key: "connected",
       label: "Connected to Shopify",
@@ -38,6 +38,21 @@ function onboardingStages(tenant: Doc<"tenants">, hasProfiles: boolean) {
       done: true,
       failed: false,
     },
+  ];
+
+  // Only a tenant that came through the invitation funnel has a fee to
+  // pay, so only that tenant sees this stage — a self-serve tenant's
+  // onboarding list is byte-for-byte what it was before this phase.
+  if (tenant.invitationId) {
+    stages.push({
+      key: "setup_fee",
+      label: "Setup fee",
+      done: tenant.setupFeeStatus === "paid",
+      failed: false,
+    });
+  }
+
+  stages.push(
     {
       key: "catalog",
       label: "Reading your catalog",
@@ -68,7 +83,8 @@ function onboardingStages(tenant: Doc<"tenants">, hasProfiles: boolean) {
       done: tenant.widgetStatus === "live",
       failed: false,
     },
-  ];
+  );
+  return stages;
 }
 
 /** Overview (spec §71). */
@@ -90,7 +106,15 @@ export const overview = internalQuery({
         brandBrain: tenant.brandBrainStatus,
         widget: tenant.widgetStatus,
         subscription: tenant.subscriptionStatus,
-        active: isActive(tenant, billingEnabled()),
+        active: isActive(tenant, billingEnabled(), setupFeeEnabled()),
+        // INVITED, PAID and ACTIVE are three different questions —
+        // exposed as three fields rather than folded into `active`, so
+        // the dashboard can say which one is actually blocking a
+        // merchant instead of just "not active".
+        invitation: tenant.invitationId ? "invited" : "none",
+        setupFee: !tenant.invitationId
+          ? "not_required"
+          : (tenant.setupFeeStatus ?? "unpaid"),
       },
       productCount: tenant.productCount,
       lastSyncedAt: tenant.lastSyncedAt ?? null,
@@ -99,6 +123,7 @@ export const overview = internalQuery({
       // The install is not finished until Disc is actually on the
       // storefront, and an app embed starts switched off (spec §13).
       needsActivation: tenant.widgetStatus !== "live",
+      setupFeeRequired: Boolean(tenant.invitationId) && tenant.setupFeeStatus !== "paid",
     };
   },
 });

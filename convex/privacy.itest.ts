@@ -37,6 +37,8 @@ const TENANT_OWNED = [
   "jobs",
   "webhookDeliveries",
   "stripeEvents",
+  "dodoEvents",
+  "invitations",
 ] as const;
 
 async function seedFullTenant(
@@ -169,6 +171,25 @@ async function seedFullTenant(
       outputTokens: 50,
       estimatedCostUsd: 0.001,
       updatedAt: Date.now(),
+    });
+
+    await ctx.db.insert("dodoEvents", {
+      eventId: `evt_${publicKey}`,
+      eventType: "payment.succeeded",
+      tenantId,
+      dodoPaymentId: `pay_${publicKey}`,
+      outcome: "applied",
+      receivedAt: Date.now(),
+    });
+
+    await ctx.db.insert("invitations", {
+      tokenHash: `inv_hash_${publicKey}`,
+      referenceCode: `REF_${publicKey}`,
+      status: "redeemed",
+      expiresAt: Date.now() + 1000,
+      createdAt: Date.now(),
+      redeemedAt: Date.now(),
+      tenantId,
     });
 
     return tenantId;

@@ -4,6 +4,7 @@ import { internal } from "./_generated/api";
 import { internalAction } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import {
+  DODO_EVENT_RETENTION_DAYS,
   EVENT_RETENTION_DAYS,
   JOB_STALE_RUNNING_MS,
   RESYNC_INTERVAL_HOURS,
@@ -294,6 +295,7 @@ export const purgeExpired = internalAction({
   handler: async (ctx) => {
     await ctx.runMutation(internal.auth.purgeExpiredSessions, {});
     await ctx.runMutation(internal.auth.purgeExpiredOAuthStates, {});
+    await ctx.runMutation(internal.invitations.purgeExpiredInvitations, {});
 
     // Rate-limit windows. One row per tenant per rule, so this stays
     // small — but a row is written for every tenant that ever searched,
@@ -356,6 +358,18 @@ export const purgeExpired = internalAction({
       const deleted: number = await ctx.runMutation(
         internal.billing.purgeExpiredStripeEvents,
         { olderThan: stripeCutoff, limit: 1000 },
+      );
+      if (deleted < 1000) break;
+    }
+
+    // Dodo event ledger — the $400 setup fee's equivalent of the Stripe
+    // block above, same reasoning: dedup only matters as long as a
+    // delivery could still be replayed.
+    const dodoCutoff = Date.now() - DODO_EVENT_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 10; i++) {
+      const deleted: number = await ctx.runMutation(
+        internal.setupFee.purgeExpiredDodoEvents,
+        { olderThan: dodoCutoff, limit: 1000 },
       );
       if (deleted < 1000) break;
     }

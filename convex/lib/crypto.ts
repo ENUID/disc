@@ -11,6 +11,8 @@
  *   Shopify webhook          base64 HMAC over the RAW request body
  *   Stripe webhook           hex HMAC over `{timestamp}.{raw body}`, with
  *                            a replay window
+ *   Dodo webhook             base64 HMAC over `{id}.{timestamp}.{raw body}`,
+ *                            key is base64-decoded, with a replay window
  *
  * The webhook ones must run against raw bytes. Parsing and
  * re-serialising changes whitespace and key order, which breaks the
@@ -134,6 +136,57 @@ export async function verifyStripeSignature(
 
   const computed = toHex(await hmacRaw(secret, encoder.encode(`${timestamp}.${rawBody}`)));
   return signatures.some((candidate) => timingSafeEqual(computed, candidate));
+}
+
+/**
+ * Dodo webhook: the Standard Webhooks scheme (docs.dodopayments.com
+ * confirms Dodo implements it; the algorithm here is Standard Webhooks'
+ * own published spec, not Dodo-specific guesswork).
+ *
+ * Headers: `webhook-id`, `webhook-timestamp`, `webhook-signature`.
+ * Signed content is `{id}.{timestamp}.{raw body}`, HMAC-SHA256, key is
+ * the part of the secret AFTER its `whsec_` prefix, base64-DECODED
+ * before use (not used as a raw string key — this is the one step that
+ * differs from Stripe's scheme, which uses its secret as-is). The header
+ * carries one or more space-separated `v1,<base64 signature>` entries
+ * (multiple during a secret rotation); any match is accepted.
+ */
+export async function verifyDodoWebhookHmac(
+  rawBody: string,
+  headers: { id: string | null; timestamp: string | null; signature: string | null },
+  secret: string,
+  toleranceSeconds = 300,
+): Promise<boolean> {
+  if (!secret || !headers.id || !headers.timestamp || !headers.signature) return false;
+
+  const ts = Number(headers.timestamp);
+  if (!Number.isFinite(ts)) return false;
+  if (Math.abs(Date.now() / 1000 - ts) > toleranceSeconds) return false;
+
+  const secretB64 = secret.startsWith("whsec_") ? secret.slice("whsec_".length) : secret;
+  let keyBytes: Uint8Array;
+  try {
+    keyBytes = Uint8Array.from(atob(secretB64), (c) => c.charCodeAt(0));
+  } catch {
+    return false; // malformed secret, not a forged request
+  }
+  const key = await crypto.subtle.importKey(
+    "raw",
+    bufferOf(keyBytes),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signedContent = `${headers.id}.${headers.timestamp}.${rawBody}`;
+  const computed = toBase64(
+    await crypto.subtle.sign("HMAC", key, bufferOf(encoder.encode(signedContent))),
+  );
+
+  const candidates = headers.signature
+    .split(" ")
+    .map((entry) => entry.split(",")[1])
+    .filter((sig): sig is string => Boolean(sig));
+  return candidates.some((candidate) => timingSafeEqual(computed, candidate));
 }
 
 /**

@@ -78,6 +78,32 @@ export default defineSchema({
     stripeSubscriptionId: v.optional(v.string()),
 
     /**
+     * The $400 Disc Initial Setup fee — Dodo Payments, one-time, and
+     * deliberately not folded into `subscriptionStatus` above. That field
+     * is Stripe's recurring-subscription vocabulary; this is a separate,
+     * non-recurring concern with its own provider, so collapsing them
+     * would make "active" mean two different kinds of payment at once.
+     *
+     * `invitationId` is set only for a tenant whose install redeemed an
+     * invitation (see `invitations` below) — absent for every tenant
+     * connected the ordinary self-serve way, before or after this phase.
+     * That absence IS the grandfather clause: `setupFeeSatisfied` in
+     * lib/tenancy.ts treats no invitation as nothing to satisfy, so an
+     * existing merchant is never newly gated by a fee they were never
+     * invited to pay.
+     *
+     * `setupFeeStatus` is therefore only meaningful alongside
+     * `invitationId` — "unpaid" the moment an invitation is redeemed,
+     * "paid" only once a verified Dodo webhook says so (never a browser
+     * return from checkout).
+     */
+    invitationId: v.optional(v.id("invitations")),
+    setupFeeStatus: v.optional(v.union(v.literal("unpaid"), v.literal("paid"))),
+    setupFeePaidAt: v.optional(v.number()),
+    /** Dodo's own payment id, for support lookups — audit only. */
+    dodoPaymentId: v.optional(v.string()),
+
+    /**
      * Maintained catalog aggregates (P1.6).
      *
      * `catalogHealth` used to compute these by collecting every product,
@@ -199,6 +225,49 @@ export default defineSchema({
     .index("by_tenant", ["tenantId"]),
 
   /**
+   * Invitations — the handoff from the public application funnel
+   * (disc-site, a separate app) into Disc itself.
+   *
+   * disc-site must never send its own internal application id: this
+   * table is keyed by an opaque, cryptographically random token, the
+   * same shape and the same "hash only, raw value never stored" rule as
+   * `merchantSessions`. `referenceCode` and `email` are carried along as
+   * human-readable, non-secret supporting identifiers — never as the
+   * lookup key, because a lookup keyed on a guessable reference code
+   * would let anyone enumerate invitations.
+   *
+   * `status` makes single-use structural rather than convention: a
+   * mutation may act on a `pending` row and flip it to `redeemed` in the
+   * same transaction, so two concurrent redemptions of one token cannot
+   * both succeed — exactly the dedup-then-apply shape `stripeEvents`
+   * already uses for the same reason.
+   *
+   * `tenantId` is absent until redemption and set exactly once. Until
+   * then this row describes an invitation, not a tenant — INVITATION AND
+   * TENANT ARE NOT THE SAME THING. A tenant still comes into existence
+   * only through `createOrUpdateFromInstall`, i.e. only after Shopify
+   * OAuth actually proves the shop domain; this table cannot create one
+   * by itself, and never accepts a shop domain as input. That is what
+   * stops an invitation link from being used to impersonate an arbitrary
+   * shop — the domain is always Shopify's word, never the redeemer's.
+   */
+  invitations: defineTable({
+    tokenHash: v.string(), // sha256 — the raw token is never stored
+    referenceCode: v.string(),
+    email: v.optional(v.string()),
+    status: v.union(v.literal("pending"), v.literal("redeemed"), v.literal("revoked")),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+    redeemedAt: v.optional(v.number()),
+    tenantId: v.optional(v.id("tenants")),
+  })
+    .index("by_token_hash", ["tokenHash"])
+    // Operator lookups only (e.g. "did we already invite this
+    // applicant") — never exposed through a public query or route.
+    .index("by_reference_code", ["referenceCode"])
+    .index("by_tenant", ["tenantId"]),
+
+  /**
    * Rate-limit counters (spec §90).
    *
    * One row per tenant per rule, holding a fixed window. A sliding
@@ -304,6 +373,42 @@ export default defineSchema({
     // Deduplication. Stripe event ids are globally unique, so unlike the
     // Shopify ledger this is not tenant-scoped — the tenant is a result
     // of processing the event, not an input to identifying it.
+    .index("by_event_id", ["eventId"])
+    .index("by_tenant", ["tenantId"])
+    .index("by_received", ["receivedAt"]),
+
+  /**
+   * Dodo Payments event ledger — the $400 setup fee's equivalent of
+   * `stripeEvents` above, and for the same reason: without a dedup
+   * record, replaying a `payment.succeeded` delivery would be a way to
+   * re-apply a payment, and nothing here may be applied twice.
+   *
+   * Simpler than the Stripe ledger by construction, not by omission: a
+   * one-time fee has no subscription lifecycle to reorder against, so
+   * there is no ordering guard to speak of — `unpaid -> paid` is the only
+   * transition that ever happens, `payment.failed` never writes it, and
+   * applying "paid" a second time is already a no-op.
+   *
+   * `eventId` is Dodo's `webhook-id` delivery header — the identifier the
+   * Standard Webhooks spec Dodo implements guarantees exists, not a
+   * field hunted for inside the body.
+   */
+  dodoEvents: defineTable({
+    eventId: v.string(),
+    eventType: v.string(),
+    tenantId: v.optional(v.id("tenants")),
+    claimedTenantId: v.optional(v.string()),
+    dodoPaymentId: v.optional(v.string()),
+    /**
+     * applied            marked the tenant's setup fee paid
+     * ignored_unhandled  an event type Disc does not act on (e.g. failed)
+     * ignored_unresolved no tenant could be safely resolved
+     * ignored_already_paid same tenant, already paid — replay, not news
+     */
+    outcome: v.string(),
+    reason: v.optional(v.string()),
+    receivedAt: v.number(),
+  })
     .index("by_event_id", ["eventId"])
     .index("by_tenant", ["tenantId"])
     .index("by_received", ["receivedAt"]),
@@ -505,6 +610,12 @@ export default defineSchema({
     state: v.string(),
     shopDomain: v.string(),
     expiresAt: v.number(),
+    // Carries an invitation through the Shopify round-trip: `/auth` sets
+    // this when the merchant arrived via an invite link, `/auth/callback`
+    // reads it back off the state Shopify hands back unmodified, and
+    // passes it into `createOrUpdateFromInstall` for atomic redemption.
+    // A hash, matching `invitations.tokenHash` — never the raw token.
+    invitationTokenHash: v.optional(v.string()),
   }).index("by_state", ["state"]),
 
   /**

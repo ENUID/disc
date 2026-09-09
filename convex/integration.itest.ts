@@ -419,7 +419,7 @@ describe("OAuth state", () => {
         state: "s1",
         shopDomain: "acme.myshopify.com",
       }),
-    ).toBe(true);
+    ).not.toBeNull();
 
     // Replaying the same state must fail.
     expect(
@@ -427,7 +427,7 @@ describe("OAuth state", () => {
         state: "s1",
         shopDomain: "acme.myshopify.com",
       }),
-    ).toBe(false);
+    ).toBeNull();
   });
 
   test("state bound to a different shop is rejected and burned", async () => {
@@ -443,7 +443,7 @@ describe("OAuth state", () => {
         state: "s2",
         shopDomain: "evil.myshopify.com",
       }),
-    ).toBe(false);
+    ).toBeNull();
 
     // Deleted even though it did not match, so it cannot be retried
     // against the correct shop.
@@ -463,7 +463,24 @@ describe("OAuth state", () => {
         state: "s3",
         shopDomain: "acme.myshopify.com",
       }),
-    ).toBe(false);
+    ).toBeNull();
+  });
+
+  test("an invitation hash saved with the state is handed back on successful consumption", async () => {
+    const t = convexTest(schema, modules);
+    await t.mutation(internal.shopify.oauth.saveState, {
+      state: "s4",
+      shopDomain: "acme.myshopify.com",
+      expiresAt: Date.now() + 60_000,
+      invitationTokenHash: "abc123",
+    });
+
+    expect(
+      await t.mutation(internal.shopify.oauth.consumeState, {
+        state: "s4",
+        shopDomain: "acme.myshopify.com",
+      }),
+    ).toEqual({ invitationTokenHash: "abc123" });
   });
 });
 

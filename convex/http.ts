@@ -3,6 +3,8 @@ import { httpAction } from "./_generated/server";
 import { internal, api } from "./_generated/api";
 import {
   randomToken,
+  sha256Hex,
+  verifyDodoWebhookHmac,
   verifyShopifyOAuthHmac,
   timingSafeEqual,
   verifyShopifyWebhookHmac,
@@ -15,6 +17,7 @@ import { encryptSecret } from "./lib/crypto";
 import {
   ADMIN_KEY,
   DASHBOARD_URL,
+  DODO_PAYMENTS_WEBHOOK_KEY,
   ENCRYPTION_KEY,
   OAUTH_STATE_TTL_MS,
   PUBLIC_URL,
@@ -340,16 +343,27 @@ http.route({
   path: "/auth",
   method: "GET",
   handler: httpAction(async (ctx, request) => {
-    const shop = new URL(request.url).searchParams.get("shop") ?? "";
+    const url = new URL(request.url);
+    const shop = url.searchParams.get("shop") ?? "";
     if (!isValidShopDomain(shop)) {
       return json({ detail: "shop must be a valid *.myshopify.com domain" }, 400);
     }
+
+    // An invitation, if this merchant arrived via an invite link. Only
+    // its hash is ever stored — never validated here, on purpose: the
+    // dashboard's /invite page already gave early feedback on whether
+    // the link is good, and the one validation that actually matters
+    // happens exactly once, atomically, at redemption in
+    // `createOrUpdateFromInstall`. Duplicating that check here would not
+    // make anything safer, only harder to keep in sync.
+    const invite = url.searchParams.get("invite");
 
     const state = randomToken();
     await ctx.runMutation(internal.shopify.oauth.saveState, {
       state,
       shopDomain: shop,
       expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
+      invitationTokenHash: invite ? await sha256Hex(invite) : undefined,
     });
 
     const params = new URLSearchParams({
@@ -407,6 +421,12 @@ http.route({
       shopDomain: shop,
       accessTokenCipher: cipher,
       scopes: tokenData.scope ?? "",
+      // Whatever invitation rode along through `/auth`, if any. Shopify
+      // has now proven the shop domain via HMAC and a real code exchange
+      // — this is the only point an invitation is ever allowed to attach
+      // to a tenant, and it is always this proven domain, never one the
+      // invitation itself named (it never names one).
+      invitationTokenHash: consumed.invitationTokenHash,
     });
 
     // Best-effort: a webhook that fails to register degrades this tenant
@@ -605,6 +625,20 @@ async function requireMerchant(ctx: any, request: Request) {
   return await ctx.runQuery(internal.auth.tenantForToken, { token });
 }
 
+/**
+ * FIX (found while wiring up invitation/setup-fee status): this handler
+ * used to build its own ad-hoc, snake_case response inline. Every
+ * dashboard page that calls this route — the authenticated shell layout,
+ * analytics, brand, catalog — types the result as the richer, camelCase
+ * `Overview` shape (`status.active`, `onboarding`, `needsActivation`)
+ * that `internal.merchant.overview` actually returns and that this
+ * route's own test mock (`dashboard/tests/mock-api.js`) already models.
+ * Left as it was, none of the new invitation/setup-fee fields below
+ * would reach the nav chrome or those four pages at all — only the
+ * Overview page itself, which calls `/merchant/dashboard` instead. Now
+ * both routes serve the same query, so there is exactly one Overview
+ * shape rather than two.
+ */
 allowPreflight("/merchant/overview");
 http.route({
   path: "/merchant/overview",
@@ -613,21 +647,9 @@ http.route({
     const tenantId = await requireMerchant(ctx, request);
     if (!tenantId) return json({ detail: "Unauthorized" }, 401);
 
-    const tenant = await ctx.runQuery(internal.tenants.getById, { tenantId });
-    if (!tenant) return json({ detail: "Unauthorized" }, 401);
-
-    // Note what is absent: no access token, no cipher, no public key.
-    return json({
-      shop_domain: tenant.shopDomain,
-      catalog_status: tenant.catalogStatus,
-      brand_brain_status: tenant.brandBrainStatus,
-      widget_status: tenant.widgetStatus,
-      product_count: tenant.productCount,
-      last_synced_at: tenant.lastSyncedAt ?? null,
-      subscription_status: tenant.subscriptionStatus,
-      plan: tenant.plan ?? null,
-      catalog_error: tenant.catalogError ?? null,
-    });
+    const overview = await ctx.runQuery(internal.merchant.overview, { tenantId });
+    if (!overview) return json({ detail: "Unauthorized" }, 401);
+    return json(overview);
   }),
 });
 
@@ -997,6 +1019,35 @@ http.route({
   }),
 });
 
+// ---------------------------------------------------------------------
+// Setup fee — the $400 Disc Initial Setup charge (Dodo Payments).
+//
+// A separate concern from billing above, on purpose: one-time, not a
+// subscription, not charged at the same moment as the recurring plan.
+// Same shape as the billing checkout route — merchant-authenticated,
+// hands back a hosted checkout url, marks nothing paid.
+// ---------------------------------------------------------------------
+
+allowPreflight("/merchant/setup-fee/checkout");
+http.route({
+  path: "/merchant/setup-fee/checkout",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const tenantId = await requireMerchant(ctx, request);
+    if (!tenantId) return json({ detail: "Unauthorized" }, 401);
+
+    const dashboard = DASHBOARD_URL() || PUBLIC_URL();
+    const result = await ctx.runAction(internal.setupFee.startCheckout, {
+      tenantId,
+      // Derived here, not taken from the request body — same reasoning
+      // as the Stripe checkout route: an attacker-supplied return url
+      // would turn Dodo's redirect into an open redirect.
+      returnUrl: `${dashboard}/app/overview?setup_fee=success`,
+    });
+    return json(result, "error" in result ? 400 : 200);
+  }),
+});
+
 /**
  * Stripe webhooks.
  *
@@ -1051,6 +1102,114 @@ http.route({
     // retries non-2xx, and each of these stays the same on redelivery.
     await ctx.runMutation(internal.billing.recordStripeEvent, { eventId, event });
     return new Response("OK", { status: 200 });
+  }),
+});
+
+/**
+ * Dodo webhooks — the $400 setup fee's equivalent of the Stripe route
+ * above, verified with the Standard Webhooks scheme instead of Stripe's
+ * own (see lib/crypto.ts's `verifyDodoWebhookHmac`). Same order of
+ * operations for the same reason: raw body, verify, THEN parse.
+ */
+http.route({
+  path: "/webhooks/dodo",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const raw = await request.text();
+
+    const secret = DODO_PAYMENTS_WEBHOOK_KEY();
+    if (!secret) {
+      return new Response("Webhook secret not configured", { status: 503 });
+    }
+
+    const verified = await verifyDodoWebhookHmac(
+      raw,
+      {
+        id: request.headers.get("webhook-id"),
+        timestamp: request.headers.get("webhook-timestamp"),
+        signature: request.headers.get("webhook-signature"),
+      },
+      secret,
+    );
+    if (!verified) return new Response("Invalid signature", { status: 401 });
+
+    let event: unknown;
+    try {
+      event = JSON.parse(raw);
+    } catch {
+      return new Response("Malformed body", { status: 400 });
+    }
+
+    // Dedup identity is the delivery header, not a body field — the
+    // Standard Webhooks spec guarantees `webhook-id` exists, so this is
+    // never hunted for inside a payload whose exact shape was only
+    // partly confirmed (see lib/dodo.ts's own note on that).
+    const eventId = request.headers.get("webhook-id");
+    if (!eventId) return new Response("Missing webhook-id", { status: 400 });
+
+    await ctx.runMutation(internal.setupFee.recordDodoEvent, { eventId, event });
+    return new Response("OK", { status: 200 });
+  }),
+});
+
+/**
+ * Mint an invitation. OPERATOR ONLY, same shape as `/admin/economics`
+ * below: a separate operator credential, refused outright when unset,
+ * no CORS preflight so no browser on any origin can call it.
+ *
+ * This is the secure channel between disc-site and Disc that the spec
+ * asked to be designed: a shared server-side secret over HTTPS, called
+ * server-to-server (disc-site's own admin action would `fetch` this, not
+ * a browser), never a public unauthenticated endpoint. disc-site sends
+ * only `referenceCode` and/or `email` — never its own internal
+ * application id, which this route's request shape has no field for
+ * even if a caller tried.
+ */
+http.route({
+  path: "/admin/invitations",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const expected = ADMIN_KEY();
+    if (!expected) {
+      return new Response("Invitations are not configured", { status: 503 });
+    }
+    const header = request.headers.get("Authorization") ?? "";
+    const provided = header.startsWith("Bearer ") ? header.slice(7) : "";
+    if (!timingSafeEqual(provided, expected)) {
+      return new Response("Unauthorized", { status: 401 });
+    }
+
+    const body = await request.json().catch(() => ({}));
+    const referenceCode = typeof body.referenceCode === "string" ? body.referenceCode : "";
+    if (!referenceCode) return json({ detail: "referenceCode is required" }, 400);
+
+    const result = await ctx.runMutation(internal.invitations.createInvitation, {
+      referenceCode,
+      email: typeof body.email === "string" ? body.email : undefined,
+    });
+    // No CORS headers: this is server-to-server, not for a browser.
+    return new Response(JSON.stringify(result), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }),
+});
+
+/**
+ * Whether an invitation token is currently redeemable. Public,
+ * unauthenticated by design (the token IS the credential — see
+ * invitations.ts) and deliberately minimal: a boolean, nothing else. The
+ * dashboard's /invite page calls this to decide which of two static
+ * messages to show before a merchant ever reaches Shopify OAuth.
+ */
+allowPreflight("/invitations/status");
+http.route({
+  path: "/invitations/status",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const token = new URL(request.url).searchParams.get("token") ?? "";
+    const result = await ctx.runQuery(api.invitations.checkToken, { token });
+    return json(result, 200, { "Cache-Control": "no-store" });
   }),
 });
 
