@@ -1,0 +1,17 @@
+# Theme app extension.
+#
+# This is how Disc reaches a storefront. Not a script tag the merchant
+# pastes, and not the ScriptTag Admin API — Shopify's docs are explicit
+# that an app integrating with a theme must use a theme app extension,
+# and ScriptTag is now only for vintage themes.
+#
+# What this buys, concretely:
+#   - the merchant never edits theme code
+#   - uninstalling removes Disc completely, with no snippet left rotting
+#     in a theme after they cancel
+#   - the asset is served by Shopify's CDN, closer to shoppers than our
+#     backend and not a request our infrastructure has to survive
+#   - a widget fix ships by `shopify app deploy`, touching no store
+
+type = "theme"
+name = "Disc"

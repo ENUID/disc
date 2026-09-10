@@ -1,0 +1,25 @@
+{
+  "name": "disc-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Disc merchant dashboard (spec §70-§76). Deployed to Vercel; talks to the Convex HTTP router.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "node tests/render_test.js",
+    "verify": "npm run typecheck && npm run build && npm test"
+  },
+  "dependencies": {
+    "next": "^16.3.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "^5.9.3"
+  }
+}

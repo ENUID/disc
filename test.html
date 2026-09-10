@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <!-- Every real Shopify theme ships this; without it a mobile browser
+         lays the page out at 980px and scales down, which made Disc look
+         broken on phones during device testing. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Fake Shopify Store — Disc widget test harness</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        max-width: 640px;
+        margin: 80px auto 160px;
+        color: #111;
+        background: #fafafa;
+      }
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 40px;
+      }
+      .logo {
+        font-weight: 800;
+        font-size: 20px;
+        letter-spacing: -0.02em;
+      }
+      form {
+        position: relative;
+      }
+      input[type="search"] {
+        width: 100%;
+        padding: 14px 16px;
+        font-size: 15px;
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        outline: none;
+      }
+      input[type="search"]:focus {
+        border-color: #111;
+      }
+      .hint {
+        margin-top: 12px;
+        font-size: 13px;
+        color: #888;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="logo">ACME OUTFITTERS</div>
+      <nav>Shop / About / Cart (0)</nav>
+    </header>
+
+    <!-- This mimics a stock Shopify theme's own search form. Disc finds
+         this exact input and hides it (layout space preserved, so
+         nothing else on the page reflows) — merchants don't need two
+         search boxes once Disc's own bar is floating over the store. -->
+    <form action="/search" method="get" role="search">
+      <input
+        type="search"
+        name="q"
+        placeholder="Search store..."
+        autocomplete="off"
+      />
+    </form>
+    <p class="hint">
+      The search box above disappears once Disc attaches. Use the Disc bar
+      at the bottom instead — try “I need a breathable layer for a humid
+      beach vacation”, then open a result to see the product view,
+      complete-the-look and add-to-cart.
+    </p>
+    <p class="hint">
+      This page isn’t a real Shopify storefront, so Disc falls back to the
+      shared demo catalog and add-to-cart reports itself as a demo rather
+      than pretending to work. On a real install both are live.
+    </p>
+
+    <script src="frontend/disc-widget.js" data-api-url="http://localhost:8000"></script>
+  </body>
+</html>

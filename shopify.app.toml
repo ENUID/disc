@@ -1,0 +1,54 @@
+# Shopify CLI app configuration.
+#
+# DISTRIBUTION: custom, not public.
+#
+# A custom-distribution app installs on one store at a time with no App
+# Store review, which is what lets Disc ship to its first merchants
+# without waiting weeks for approval. It still supports theme app
+# extensions, so the merchant gets the proper install — flip a switch in
+# the theme editor, no pasted snippet, no edited theme.liquid.
+#
+# The one consequence: custom apps cannot use Shopify's Billing API, so
+# billing stays on Stripe. That is not a workaround, it is the documented
+# constraint of this distribution type.
+#
+# `client_id` is issued when the app is created in the Partner Dashboard
+# and cannot be generated locally, so this file is a template until it is
+# filled in. Same for the URLs — they must point at the deployed Convex
+# HTTP router, because OAuth redirects and webhooks are requests *from*
+# Shopify's servers *to* that backend.
+#
+# Deploy with: shopify app deploy
+
+name = "Disc"
+handle = "disc"
+client_id = "REPLACE_WITH_PARTNER_DASHBOARD_CLIENT_ID"
+
+# The merchant dashboard on Vercel, not the Convex backend: this is where
+# a merchant lands, and it is a UI rather than an API.
+application_url = "https://REPLACE.vercel.app/app"
+embedded = false
+
+[access_scopes]
+# read_products is the entire ask. Disc indexes the catalog and nothing
+# else — no customers, no orders, no PII. Spec §11: "Do NOT request
+# customer/order data simply because it might be useful later." Every
+# extra scope is another thing a merchant must consent to at install.
+scopes = "read_products"
+
+[auth]
+redirect_urls = ["https://REPLACE.convex.site/auth/callback"]
+
+[webhooks]
+api_version = "2025-01"
+
+  # The three mandatory privacy topics. Required of every app regardless
+  # of what it stores. Disc holds no customer data, so two are
+  # acknowledgements; shop/redact really does delete the tenant's index.
+  [webhooks.privacy_compliance]
+  customer_data_request_url = "https://REPLACE.convex.site/webhooks/shopify/customers/data_request"
+  customer_deletion_url = "https://REPLACE.convex.site/webhooks/shopify/customers/redact"
+  shop_deletion_url = "https://REPLACE.convex.site/webhooks/shopify/shop/redact"
+
+[build]
+include_config_on_deploy = true
