@@ -246,6 +246,27 @@ made deliberately. Disc could not see them: compatibility was inferred
 from product attributes alone. The Look Builder turns those decisions
 into structured data.
 
+**`looks` is the content table now (P2.3), and a look is one ROLE it can
+hold.** Two claims live in it and must never merge:
+
+```
+PRESENCE       product X appears in this content   -> contentProducts
+COMPATIBILITY  X and Y were styled together        -> lookEdges
+```
+
+Only `role === "look"` produces compatibility edges — `assertsStyling()`
+in `convex/lib/content.ts` is the one place that decides, and
+`rebuildEdgesFor` never queries `contentProducts`. A campaign, lookbook,
+editorial or social post establishes presence and nothing more, because a
+shirt at minute 2 and trousers at minute 16 of a lookbook film were never
+styled as an outfit. An absent or unreadable role means `look`, so
+nothing written before P2.3 changed meaning.
+
+Video is NOT implemented — Disc can represent a time range
+(`{kind: "interval", startMs, endMs}`) and record `mediaKind: "video"`,
+but `PROCESSABLE_MEDIA_KINDS` holds `image` alone. Neither is any social
+connector. See `PRODUCTION_CONTENT_INTELLIGENCE.md`.
+
 ```
 upload image -> vision detects garments -> Disc suggests catalog matches
              -> MERCHANT CONFIRMS -> structured look -> outfit graph

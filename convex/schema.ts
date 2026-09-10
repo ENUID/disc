@@ -653,6 +653,37 @@ export default defineSchema({
     imageStorageId: v.optional(v.id("_storage")),
 
     /**
+     * The content generalisation (P2.3).
+     *
+     * This table is Disc's content store, and a look is one ROLE it can
+     * hold rather than the only thing it can be. The fields below are
+     * what let it hold the others without any of them silently becoming
+     * a look — see `lib/content.ts`.
+     *
+     * All optional, so every row written before P2.3 reads as exactly
+     * what it was: an uploaded still image asserting a styled look.
+     *
+     *   role       what the content ASSERTS. Only "look" asserts that
+     *              its products were styled together, and only "look"
+     *              produces compatibility edges. Absent means "look".
+     *   mediaKind  what the bytes are. Absent means "image", which is
+     *              the only kind Disc can process today.
+     *   origin     where it came from. No connector is implied by a
+     *              value existing in the vocabulary.
+     *   externalId
+     *   externalUrl
+     *              identity at the source, for content Disc did not
+     *              receive as an upload. Nothing writes these yet; they
+     *              exist so that a future connector deduplicates against
+     *              a stable id rather than a title.
+     */
+    role: v.optional(v.string()),
+    mediaKind: v.optional(v.string()),
+    origin: v.optional(v.string()),
+    externalId: v.optional(v.string()),
+    externalUrl: v.optional(v.string()),
+
+    /**
      * Raw vision output. Provenance, never merged into `items`, and kept
      * so a look can be re-mapped without paying for the image again.
      */
@@ -690,6 +721,76 @@ export default defineSchema({
   })
     .index("by_tenant", ["tenantId"])
     .index("by_tenant_and_status", ["tenantId", "status"]),
+
+  /**
+   * CONTENT PRESENCE (P2.3) — "product X appears in this content".
+   *
+   * THE WHOLE POINT OF THIS TABLE IS WHAT IT IS NOT. It is not
+   * compatibility. `lookEdges` is compatibility, and the code that
+   * derives `lookEdges` never queries this table — so presence cannot
+   * become compatibility by accident, only by someone deliberately
+   * adding a read that is not there.
+   *
+   * Why that separation is load-bearing: a campaign photograph
+   * establishes both claims at once, because everything in frame was put
+   * there by one styling decision. A twenty-minute lookbook video does
+   * not — a shirt at minute 2 and trousers at minute 16 were never
+   * styled as an outfit. Deriving edges from unbounded co-presence would
+   * fill the outfit graph with pairs nobody approved, and because that
+   * graph is merchant-approved evidence, the corruption would carry the
+   * authority of a human decision it never had.
+   *
+   * `state` is the merchant authority boundary, and `rejected` is stored
+   * rather than deleted: a deleted rejection lets the next analysis
+   * propose the same wrong product again, and a merchant who has said no
+   * should not have to keep saying it. Provenance (`detectedLabel`,
+   * `confidence`, `detectedBy`) survives confirmation, so "did a human
+   * approve this, and what did the model originally think?" stays
+   * answerable.
+   *
+   * `scope` says WHERE or WHEN — absent means the whole item, which is
+   * what every still-image look means. See `PresenceScope`.
+   */
+  contentProducts: defineTable({
+    tenantId: v.id("tenants"),
+    /** The content item. Today every row points at a `looks` document. */
+    contentId: v.id("looks"),
+    productId: v.id("products"),
+
+    /** detected | confirmed | rejected. See lib/content.ts. */
+    state: v.string(),
+
+    /**
+     * Bounded scope, absent for the whole item. Closed shape on purpose:
+     * an open metadata bag here would become where every future feature
+     * stores state, and "was this claim bounded?" must keep an answer.
+     */
+    scope: v.optional(
+      v.object({
+        kind: v.string(),
+        x: v.optional(v.number()),
+        y: v.optional(v.number()),
+        w: v.optional(v.number()),
+        h: v.optional(v.number()),
+        startMs: v.optional(v.number()),
+        endMs: v.optional(v.number()),
+      }),
+    ),
+
+    /** Provenance. Kept after confirmation, never merged into it. */
+    detectedLabel: v.optional(v.string()),
+    confidence: v.optional(v.number()),
+    /** "model" or "merchant" — who first proposed this relationship. */
+    detectedBy: v.string(),
+
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_tenant_and_content", ["tenantId", "contentId"])
+    .index("by_tenant_and_product", ["tenantId", "productId"])
+    // One row per (content, product). The uniqueness a re-analysis has
+    // to respect so it updates a proposal rather than stacking another.
+    .index("by_tenant_content_product", ["tenantId", "contentId", "productId"]),
 
   /**
    * The outfit graph (§7 of the product brief).

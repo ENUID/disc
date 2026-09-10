@@ -34,6 +34,7 @@ const TENANT_OWNED = [
   "modelUsage",
   "looks",
   "lookEdges",
+  "contentProducts",
   "jobs",
   "webhookDeliveries",
   "stripeEvents",

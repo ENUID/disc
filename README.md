@@ -246,6 +246,10 @@ Claims here are limited to what the repository implements.
 - Reliability: durable background jobs, idempotent scheduling, bounded
   retry with crash recovery, Shopify and Stripe event ledgers,
   constant-time catalog health
+- A content foundation: content can carry a type, a source and an
+  external identity, and a product's presence in it is recorded with a
+  bounded scope, a merchant confirmation state and the model's original
+  provenance — kept strictly separate from styling compatibility
 
 - A merchant-controlled **entry point**: Disc presents either as the
   docked bar or as a small floating control carrying the merchant's own
@@ -262,20 +266,26 @@ Claims here are limited to what the repository implements.
 
 ## Future direction
 
-Labelled as direction. None of this is implemented.
+Labelled as direction. Where a foundation exists it is named as such —
+everything else here is unbuilt.
 
 **Comparison** — making Compare real: meaningful differences and
 trade-offs between relevant options.
 
 **A general brand content model** — editorial and campaign imagery,
-lookbooks, video, and eventually social content, generalising what the
-Look Builder already does for a single uploaded image.
+lookbooks, video, and eventually social content. The *foundation* for
+this exists: content can be typed and sourced, and a product's presence
+in it recorded with a bounded scope and a merchant's confirmation. What
+does not exist is any way to get content in other than the Look Builder.
 
 **Video intelligence** — scene and timestamp mapping: video → scenes →
 detected garments → candidate catalog products → merchant confirmation.
+Nothing here is built. Disc can represent a time range; it cannot decode
+a video.
 
-**A content/product graph**, and richer content-aware evidence in the
-decision engine.
+**Richer content-aware evidence in the decision engine.** Presence is
+stored and nothing reads it — no ranking, retrieval or explanation path
+consumes content today.
 
 Two distinctions govern all of it, and documentation must not collapse
 them:
@@ -291,6 +301,12 @@ without establishing compatibility: two garments eight minutes apart in a
 lookbook were not styled as an outfit. Deriving compatibility from
 unbounded co-presence would fill the outfit graph with pairs nobody
 styled, carrying the authority of a merchant approval it never had.
+
+They are separate in the schema rather than only in this paragraph:
+compatibility lives in `lookEdges` and is derived from an approved
+*look* alone; presence lives in `contentProducts` and the code that
+builds edges never reads it. See
+[`PRODUCTION_CONTENT_INTELLIGENCE.md`](PRODUCTION_CONTENT_INTELLIGENCE.md).
 
 And: **content is evidence, not a ranking dictator.** It must never
 override an explicit shopper constraint — "under £200", "no leather",
@@ -408,6 +424,7 @@ introduced, the test that proves it, and how to roll it back.
 | [`PRODUCTION_STRIPE_EVENTS.md`](PRODUCTION_STRIPE_EVENTS.md) | replay-safe billing state |
 | [`PRODUCTION_CATALOG_HEALTH.md`](PRODUCTION_CATALOG_HEALTH.md) | aggregates instead of corpus scans |
 | [`PRODUCTION_CATALOG_INTELLIGENCE.md`](PRODUCTION_CATALOG_INTELLIGENCE.md) | enrichment that finishes, and merchant authority over derived knowledge |
+| [`PRODUCTION_CONTENT_INTELLIGENCE.md`](PRODUCTION_CONTENT_INTELLIGENCE.md) | content presence kept separate from styling compatibility |
 | [`PRIVACY.md`](PRIVACY.md) | what is stored, and what deletion guarantees |
 
 ### Other documents

@@ -346,6 +346,19 @@ export const purgeTenant = internalMutation({
       for (const row of batch) await ctx.db.delete(row._id);
     }
 
+    // Content presence (P2.3). A separate relation from the edges above,
+    // so it needs its own drain — deleting the content and its
+    // compatibility edges would otherwise leave rows asserting that this
+    // shop's products appeared in content that no longer exists.
+    for (;;) {
+      const batch = await ctx.db
+        .query("contentProducts")
+        .withIndex("by_tenant_and_content", (q) => q.eq("tenantId", tenantId))
+        .take(500);
+      if (batch.length === 0) break;
+      for (const row of batch) await ctx.db.delete(row._id);
+    }
+
     // Job records. A purged tenant's in-flight work is cancelled by
     // deletion rather than left as `running` rows pointing at a tenant
     // that no longer exists.

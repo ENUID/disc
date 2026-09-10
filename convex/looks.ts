@@ -19,6 +19,12 @@ import {
 } from "./lib/looks";
 import { emptyProfile, type FashionProfile } from "./lib/fashion-profile";
 import { slotForGarment } from "./lib/taxonomy";
+import {
+  assertsStyling,
+  parseMediaKind,
+  parseOrigin,
+  parseRole,
+} from "./lib/content";
 
 /**
  * The Look Builder.
@@ -214,6 +220,15 @@ export const saveLook = internalMutation({
     title: v.string(),
     source: v.union(v.literal("uploaded"), v.literal("merchant_built")),
     imageStorageId: v.optional(v.id("_storage")),
+    /**
+     * The content generalisation (P2.3). All optional and all defaulting
+     * to what a look has always been, so every existing caller — the
+     * dashboard included — keeps producing exactly what it produced
+     * before: an uploaded still image asserting a styled look.
+     */
+    role: v.optional(v.string()),
+    mediaKind: v.optional(v.string()),
+    origin: v.optional(v.string()),
     detected: v.optional(v.any()),
     items: v.array(
       v.object({
@@ -229,9 +244,26 @@ export const saveLook = internalMutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ lookId: Id<"looks"> } | { error: string }> => {
+    const role = parseRole(args.role);
+    const mediaKind = parseMediaKind(args.mediaKind);
+    const origin = parseOrigin(
+      args.origin,
+      args.source === "uploaded" ? "merchant_upload" : "merchant_built",
+    );
+
     const items = args.items.slice(0, MAX_ITEMS);
-    if (items.length < 2) {
+    // TWO PRODUCTS IS A LOOK'S RULE, NOT CONTENT'S. A styled combination
+    // of one piece is not a combination — that minimum is what makes a
+    // look's items a compatibility claim at all. Content that only
+    // asserts presence has no such floor: a campaign photograph showing
+    // exactly one product is a perfectly good statement about that
+    // product, and rejecting it would be applying outfit semantics to
+    // something that never claimed to be an outfit.
+    if (assertsStyling(role) && items.length < 2) {
       return { error: "A look needs at least two products" };
+    }
+    if (items.length < 1) {
+      return { error: "Content needs at least one product" };
     }
 
     // Every product must belong to this tenant. Without this a merchant
@@ -288,8 +320,10 @@ export const saveLook = internalMutation({
         ...attributes,
         updatedAt: now,
       });
-      // Its products may have changed, so its edges must be rebuilt from
-      // scratch rather than added to.
+      // Its products may have changed, so both relations are rebuilt
+      // from scratch rather than added to — separately, because they are
+      // separate claims with separate lifecycles.
+      await syncPresenceFor(ctx, args.tenantId, args.lookId, resolved);
       await rebuildEdgesFor(ctx, args.tenantId, args.lookId);
       return { lookId: args.lookId };
     }
@@ -308,6 +342,9 @@ export const saveLook = internalMutation({
       tenantId: args.tenantId,
       title,
       source: args.source,
+      role,
+      mediaKind,
+      origin,
       imageStorageId: args.imageStorageId,
       detected: args.detected,
       items: resolved,
@@ -318,9 +355,113 @@ export const saveLook = internalMutation({
       updatedAt: now,
     });
 
+    await syncPresenceFor(ctx, args.tenantId, lookId, resolved);
     return { lookId };
   },
 });
+
+/**
+ * Keep the presence relation in step with what the merchant confirmed.
+ *
+ * A content item's confirmed products are, trivially, products that
+ * appear in it — so every role writes presence, and `contentProducts`
+ * answers "what is in this content" uniformly whether the content is a
+ * styled look or a campaign photograph.
+ *
+ * THE DEPENDENCY IS ONE-WAY AND MUST STAY THAT WAY. Confirmed items
+ * become presence; presence never becomes items, and never becomes a
+ * compatibility edge. Rebuilt in the same mutation that rewrote `items`,
+ * so the two cannot drift.
+ *
+ * Rows the merchant rejected are left alone — a re-map should not
+ * quietly un-reject something a human already ruled out.
+ */
+async function syncPresenceFor(
+  ctx: { db: any },
+  tenantId: Id<"tenants">,
+  contentId: Id<"looks">,
+  items: Array<{ productId: Id<"products">; detectedLabel?: string; confidence?: number }>,
+): Promise<void> {
+  const keep = new Set(items.map((item) => String(item.productId)));
+  const now = Date.now();
+
+  const existing = await ctx.db
+    .query("contentProducts")
+    .withIndex("by_tenant_and_content", (q: any) =>
+      q.eq("tenantId", tenantId).eq("contentId", contentId),
+    )
+    .take(MAX_PRESENCE_ROWS);
+
+  const seen = new Map<string, any>();
+  for (const row of existing) {
+    const key = String(row.productId);
+    seen.set(key, row);
+    // A product dropped from the confirmed set is no longer asserted to
+    // be present — unless a merchant explicitly rejected it, which is a
+    // decision worth keeping.
+    if (!keep.has(key) && row.state !== "rejected") {
+      await ctx.db.delete(row._id);
+    }
+  }
+
+  for (const item of items) {
+    const key = String(item.productId);
+    const row = seen.get(key);
+    if (row?.state === "rejected") continue;
+
+    const doc = {
+      tenantId,
+      contentId,
+      productId: item.productId,
+      state: "confirmed",
+      // A still image's confirmed product is present in the whole frame.
+      // A narrower scope is something a merchant or a future analysis
+      // supplies; it is never invented here.
+      scope: row?.scope ?? { kind: "whole" },
+      // PROVENANCE SURVIVES CONFIRMATION. Falling back to the existing
+      // row matters because Convex deletes a field patched to
+      // `undefined`: a merchant confirming a detected product through a
+      // path that does not resend the label would otherwise erase what
+      // the model originally thought, and "did a human approve this, or
+      // did a model?" would stop being answerable.
+      detectedLabel: item.detectedLabel ?? row?.detectedLabel,
+      confidence: item.confidence ?? row?.confidence,
+      detectedBy: row?.detectedBy ?? (item.detectedLabel ? "model" : "merchant"),
+      updatedAt: now,
+    };
+
+    if (row) await ctx.db.patch(row._id, doc);
+    else await ctx.db.insert("contentProducts", { ...doc, createdAt: now });
+  }
+}
+
+/** Mirrors `MAX_PRESENCE_PER_CONTENT`; a look is capped far below it. */
+const MAX_PRESENCE_ROWS = 100;
+
+/**
+ * Drop every presence row for one content item.
+ *
+ * Local rather than a call into `convex/content.ts`, so that the
+ * dependency between the two modules stays one-way at the import level
+ * too: nothing in the compatibility path can reach the presence module,
+ * even by following an import that already exists for another reason.
+ */
+async function clearPresenceFor(
+  ctx: { db: any },
+  tenantId: Id<"tenants">,
+  contentId: Id<"looks">,
+): Promise<void> {
+  for (;;) {
+    const batch = await ctx.db
+      .query("contentProducts")
+      .withIndex("by_tenant_and_content", (q: any) =>
+        q.eq("tenantId", tenantId).eq("contentId", contentId),
+      )
+      .take(200);
+    if (batch.length === 0) break;
+    for (const row of batch) await ctx.db.delete(row._id);
+  }
+}
 
 /**
  * Approve or archive.
@@ -354,7 +495,13 @@ export const deleteLook = internalMutation({
     const look = await ctx.db.get(args.lookId);
     if (!look || look.tenantId !== args.tenantId) return false;
 
+    // Both relations, removed separately because they are separate
+    // claims: compatibility edges the content contributed, and presence
+    // rows asserting the products were in it. Leaving either behind
+    // would orphan a row pointing at content that no longer exists.
     await removeEdgesFor(ctx, args.tenantId, args.lookId);
+    await clearPresenceFor(ctx, args.tenantId, args.lookId);
+
     // The image goes too. It is the merchant's campaign photography and
     // there is no reason to keep paying to store it once the look that
     // referenced it is gone.
@@ -371,14 +518,32 @@ export const deleteLook = internalMutation({
 // ---------------------------------------------------------------------
 
 /**
- * Rebuild one look's contribution to the graph.
+ * Rebuild one content item's contribution to the COMPATIBILITY graph.
  *
  * Remove-then-add rather than incremental: a look's products change when
  * a merchant re-maps it, and incrementally adjusting edges for a changed
  * membership is the kind of arithmetic that drifts silently until the
  * graph no longer describes any real look.
  *
- * Only approved looks contribute. A draft is a merchant thinking aloud.
+ * TWO GATES, AND THEY MEAN DIFFERENT THINGS.
+ *
+ *   role === "look"        this content ASSERTS that its products were
+ *                          styled together. A campaign, lookbook,
+ *                          editorial or social post does not — those
+ *                          establish presence and nothing more.
+ *   status === "approved"  a merchant signed off. A draft is a merchant
+ *                          thinking aloud.
+ *
+ * The first gate is what P2.3 adds, and it is why generalising this
+ * table did not quietly widen the outfit graph. Without it, the first
+ * campaign video a merchant attached would have taught Disc that a shirt
+ * seen at minute 2 goes with trousers seen at minute 16 — a pair nobody
+ * styled, carrying the authority of a merchant approval it never had.
+ *
+ * NOTE WHAT IS NOT READ HERE. `contentProducts` — the presence relation
+ * — is never queried by this function. Presence cannot become
+ * compatibility through a plausible-looking edit; it takes adding a
+ * query that is deliberately absent.
  */
 async function rebuildEdgesFor(
   ctx: { db: any },
@@ -389,6 +554,7 @@ async function rebuildEdgesFor(
 
   const look: Doc<"looks"> | null = await ctx.db.get(lookId);
   if (!look || look.status !== "approved") return;
+  if (!assertsStyling(parseRole(look.role))) return;
 
   for (const pair of pairsOf(look.items.map((i: { productId: string }) => i.productId))) {
     const existing = await ctx.db
@@ -481,10 +647,24 @@ export const affinityFor = internalQuery({
 // Reading
 // ---------------------------------------------------------------------
 
+/**
+ * The Look Builder's list, and only looks.
+ *
+ * `looks` is the content table now, so "everything in it" and "the
+ * merchant's looks" stopped being the same set. This query means the
+ * second. Without the filter, the first campaign or lookbook to exist —
+ * from any future path — would appear on the Looks page presented as a
+ * styled outfit, which is the UI telling a merchant something untrue
+ * about their own knowledge base.
+ *
+ * Nothing reachable from the merchant API creates non-look content
+ * today: `/merchant/looks/save` does not accept a role. This is what
+ * keeps that true if it ever does.
+ */
 export const listLooks = internalQuery({
   args: { tenantId: v.id("tenants"), status: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const looks = args.status
+    const all = args.status
       ? await ctx.db
           .query("looks")
           .withIndex("by_tenant_and_status", (q) =>
@@ -495,6 +675,8 @@ export const listLooks = internalQuery({
           .query("looks")
           .withIndex("by_tenant", (q) => q.eq("tenantId", args.tenantId))
           .take(500);
+
+    const looks = all.filter((l) => assertsStyling(parseRole(l.role)));
 
     const out = [];
     for (const look of looks) {
@@ -568,10 +750,13 @@ async function productSummaries(ctx: { db: any }, look: Doc<"looks">) {
 export const lookStats = internalQuery({
   args: { tenantId: v.id("tenants") },
   handler: async (ctx, { tenantId }) => {
-    const looks = await ctx.db
-      .query("looks")
-      .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
-      .take(MAX_LOOKS_PER_TENANT);
+    // Looks, not all content — the same reason `listLooks` filters.
+    const looks = (
+      await ctx.db
+        .query("looks")
+        .withIndex("by_tenant", (q) => q.eq("tenantId", tenantId))
+        .take(MAX_LOOKS_PER_TENANT)
+    ).filter((l) => assertsStyling(parseRole(l.role)));
 
     const edges = await ctx.db
       .query("lookEdges")
